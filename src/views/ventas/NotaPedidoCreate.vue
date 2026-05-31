@@ -1,6 +1,6 @@
 <script setup>
 /**
- * RemitoVentaCreate.vue — Remito de Salida de Venta
+ * NotaPedidoCreate.vue — Nota de Pedido
  * Diseño profesional, misma calidad que VentaPOSView.
  */
 import { ref, reactive, computed, onMounted, watch, nextTick } from 'vue'
@@ -117,7 +117,7 @@ const fetchTipos = async () => {
     const { data } = await api.get('/api/tipos-comprobante/')
     const lista = data?.results ?? data ?? []
     tipos.value = lista
-      .filter(t => t.clase === 'V' && t.nombre.toLowerCase().includes('remito'))
+      .filter(t => t.clase === 'V' && t.nombre.toLowerCase().includes('pedido') || t.nombre.toLowerCase().includes('orden'))
       .map(t => ({ value: t.id, label: t.nombre }))
     if (!tipos.value.length) {
       tipos.value = lista
@@ -184,8 +184,8 @@ const guardar = async (confirmar = false) => {
       condicion_venta:      formState.condicionPago === 'CTA_CTE' ? 'CC' : 'CO',
       descuento_global_pct: Number(formState.descuentoGlobal || 0),
       observaciones:        formState.observaciones
-        ? `${formState.observaciones}\nRemito de salida`
-        : `Remito de salida`,
+        ? `${formState.observaciones}\nValidez: ${formState.validezDias} días`
+        : `Validez: ${formState.validezDias} días`,
       items: validItems.value.map(r => ({
         articulo:                 r.articuloPk,
         cantidad:                 Number(r.cantidad),
@@ -199,7 +199,7 @@ const guardar = async (confirmar = false) => {
     guardadoNumero.value = data.numero_completo || ''
     showSuccess.value    = true
     await cargarReglas(data.id)
-    message.success(`Remito ${guardadoNumero.value} guardado`)
+    message.success(`Pedido ${guardadoNumero.value} guardado`)
   } catch (e) {
     message.error(e?.response?.data?.error || e?.response?.data?.detail || 'Error al guardar')
   } finally {
@@ -235,7 +235,7 @@ const nuevo = () => {
   Object.assign(formState, {
     clienteId: null, tipoComprobanteId: tipos.value[0]?.value ?? null,
     fecha: dayjs(), condicionPago: 'CO', observaciones: '',
-    descuentoGlobal: 0,
+    descuentoGlobal: 0, validezDias: 30,
   })
   clientes.value  = []
   guardadoId.value = null
@@ -258,7 +258,7 @@ onMounted(fetchTipos)
       <div class="pres-header-center">
         <div class="pres-doc-badge">
           <FileTextOutlined />
-          <span>REMITO DE SALIDA</span>
+          <span>NOTA DE PEDIDO</span>
         </div>
         <div :class="['pres-status', estadoLabel.cls]">
           <span class="status-dot" />
@@ -317,7 +317,16 @@ onMounted(fetchTipos)
               <label>Fecha</label>
               <a-date-picker v-model:value="formState.fecha" format="DD/MM/YYYY" size="large" style="width:100%" />
             </div>
-
+            <div class="field">
+              <label>Validez</label>
+              <a-input-number
+                v-model:value="formState.validezDias"
+                :min="1" :max="365"
+                size="large"
+                style="width:100%"
+                addon-after="días"
+              />
+            </div>
             <div class="field">
               <label>Condición de venta</label>
               <a-radio-group v-model:value="formState.condicionPago" button-style="solid" size="large">
@@ -332,7 +341,7 @@ onMounted(fetchTipos)
               <a-textarea
                 v-model:value="formState.observaciones"
                 :rows="2"
-                placeholder="Observaciones del remito, instrucciones de entrega…"
+                placeholder="Notas del pedido, instrucciones especiales…"
                 size="large"
               />
             </div>
@@ -468,11 +477,11 @@ onMounted(fetchTipos)
         <div v-if="showSuccess" class="card card--success">
           <div class="success-icon"><CheckCircleOutlined /></div>
           <div class="success-num">{{ guardadoNumero }}</div>
-          <div class="success-label">Remito guardado</div>
+          <div class="success-label">Pedido guardado</div>
 
           <div class="success-actions">
             <a-button block @click="verPdf"><FilePdfOutlined /> Ver PDF</a-button>
-            <a-button block @click="nuevo"><PlusOutlined /> Nuevo remito</a-button>
+            <a-button block @click="nuevo"><PlusOutlined /> Nuevo pedido</a-button>
             <a-button block @click="router.push({ name: 'consulta-comprobantes' })">
               Ver todos los comprobantes
             </a-button>
@@ -516,7 +525,7 @@ onMounted(fetchTipos)
               size="large"
               @click="guardar(true)"
             >
-              <CheckCircleOutlined /> Confirmar remito
+              <CheckCircleOutlined /> Confirmar pedido
             </a-button>
           </div>
         </div>

@@ -28,11 +28,10 @@ const handleLogin = async ({ username, password }) => {
   formError.value = ''
   isLoading.value = true
   try {
-    const ok = await authStore.login(username, password)
-    if (ok) router.push({ name: 'home' })
-    else formError.value = 'Credenciales incorrectas'
+    await authStore.login(username, password)
+    router.push({ name: 'home' })
   } catch (e) {
-    formError.value = 'Error de conexión'
+    formError.value = e.message || 'Error de autenticación'
   } finally {
     isLoading.value = false
   }

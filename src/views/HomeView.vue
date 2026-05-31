@@ -315,6 +315,7 @@
 import { onMounted, onActivated, ref, computed, getCurrentInstance, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppCard from '@/components/ui/AppCard.vue'
+import { message } from 'ant-design-vue'
 import { fetchDashboardMetrics, fetchLatestSales } from '@/services/dashboard'
 
 // ── IDs únicos por instancia (evita colisiones SVG en HMR y multi-instancia) ──
@@ -661,9 +662,19 @@ const cleanupPollutedGlobalCSS = () => {
   document.body.classList.remove('pos-focus-mode')
 }
 
+// route debe declararse ANTES de usarlo en onMounted
+const route = useRoute()
+
 onMounted(() => {
   cleanupPollutedGlobalCSS()
   loadData()
+  // Alerta si el router redirigió aquí por falta de permisos
+  if (route.query.forbidden) {
+    message.warning({
+      content: 'No tenés permisos para acceder a esa sección.',
+      duration: 4,
+    })
+  }
 })
 
 // Keep-alive: onMounted no se re-ejecuta al volver; onActivated sí.
@@ -674,7 +685,6 @@ onActivated(() => {
 
 // FIX: condición tautológica eliminada — `newName === route.name` siempre era true.
 // Ahora solo limpiamos CSS contaminado cuando la ruta activa ES esta vista (home).
-const route = useRoute()
 watch(
   () => route.name,
   (newName) => {

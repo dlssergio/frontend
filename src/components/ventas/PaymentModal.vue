@@ -301,10 +301,10 @@ const loadCatalogs = async () => {
   loadingCatalogs.value = true
   try {
     const [tiposRes, cuentasRes, bancosRes, planesRes] = await Promise.all([
-      api.get('/api/tipos-valores/'),
-      api.get('/api/cuentas-fondo/', { params: { activa: true } }),
-      api.get('/api/bancos/'),
-      api.get('/api/planes-cuota/'),
+      api.get('/api/finanzas/tipos-valores/'),
+      api.get('/api/finanzas/cuentas-fondo/', { params: { activa: true } }),
+      api.get('/api/finanzas/bancos/'),
+      api.get('/api/finanzas/planes-cuota/'),
     ])
     tiposValor.value = Array.isArray(tiposRes.data) ? tiposRes.data : tiposRes.data?.results || []
     cuentasFondo.value = Array.isArray(cuentasRes.data)

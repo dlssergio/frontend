@@ -1,699 +1,676 @@
 <script setup>
-import { ref, reactive, onMounted, computed, watch } from 'vue'
+/**
+ * FacturaCreate.vue — Carga de Factura de Proveedor
+ * Layout fijo idéntico a VentaPOSView:
+ *  - Panel izquierdo: datos del comprobante (fijo)
+ *  - Panel derecho: tabla de artículos (scroll interno)
+ * Búsqueda de proveedor: mín 3 chars + modal avanzado
+ * Búsqueda de artículos: auto-complete inline por fila + modal avanzado
+ */
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import axios from 'axios'
-import { message, theme, Modal } from 'ant-design-vue'
-import dayjs from 'dayjs'
-import { useConfigStore } from '@/stores/config'
+import { message } from 'ant-design-vue'
 import {
-  SaveOutlined,
-  ArrowLeftOutlined,
-  PlusOutlined,
-  DeleteOutlined,
-  ShopOutlined,
+  ArrowLeftOutlined, SaveOutlined, PlusOutlined,
+  DeleteOutlined, SearchOutlined, AppstoreOutlined,
+  BarcodeOutlined, ShoppingOutlined,
 } from '@ant-design/icons-vue'
+import api from '@/services/api'
+import { proveedoresService, comprobantesCompraService } from '@/services/compras'
+import ProveedorSearchModal from '@/components/compras/ProveedorSearchModal.vue'
+import ArticuloComprasModal from '@/components/compras/ArticuloComprasModal.vue'
 
 const router = useRouter()
-const configStore = useConfigStore()
-const loading = ref(false)
 
-// CONFIGURACIÓN DE TEMA
-const themeConfig = computed(() => {
-  const isDark = configStore.currentTheme === 'dark'
-  let algorithm = isDark ? theme.darkAlgorithm : theme.defaultAlgorithm
-  let token = { borderRadius: 6, wireframe: false, fontFamily: "'Inter', sans-serif" }
-  if (isDark) {
-    token.colorPrimary = '#3b82f6'
-    token.colorBgBase = '#0f172a'
-    token.colorBgContainer = '#1e293b'
-    token.colorBorder = '#334155'
-  } else {
-    token.colorPrimary = '#1e40af'
-  }
-  return { algorithm, token }
-})
+// ─── Layout fijo (patrón VentaPOSView) ───────────────────────
+const posRootEl     = ref(null)
+const gridCardEl    = ref(null)
+const gridTableWrapEl = ref(null)
+const tableScrollY  = ref(320)
+let layoutRaf = 0
+let layoutObs = null
 
-// ESTADO
-const formState = reactive({
-  proveedor: null,
-  tipo_comprobante: null,
-  punto_venta: 1,
-  numero: '',
-  fecha: dayjs(),
-  estado: 'CN',
-})
-
-const items = ref([])
-const proveedores = ref([])
-const tiposComprobante = ref([])
-const productOptions = ref([])
-
-// --- CORRECCIÓN CLAVE: Usamos ref, NO computed ---
-const columns = ref([
-  { title: 'Artículo (Búsqueda)', dataIndex: 'articulo', width: '40%' },
-  { title: 'Cant.', dataIndex: 'cantidad', width: '10%', align: 'center' },
-  { title: 'Costo Unit.', dataIndex: 'precio', width: '20%', align: 'right' },
-  { title: 'Subtotal', dataIndex: 'subtotal', width: '20%', align: 'right' },
-  { title: '', dataIndex: 'actions', width: '10%', align: 'center' },
-])
-
-// CARGA DE DATOS
-const fetchAuxiliares = async () => {
-  try {
-    const [provRes, tipoRes] = await Promise.allSettled([
-      axios.get('http://tenant1.localhost:8000/api/proveedores/'),
-      axios.get('http://tenant1.localhost:8000/api/tipos-comprobante/'),
-    ])
-
-    if (provRes.status === 'fulfilled') {
-      const data = provRes.value.data.results || provRes.value.data
-      proveedores.value = data.map((p) => ({
-        value: p.id,
-        label: p.entidad_data?.razon_social || `Proveedor #${p.id}`,
-        cuit: p.entidad_data?.cuit || 'S/D',
-        condicion: 'Resp. Inscripto',
-      }))
-    }
-
-    if (tipoRes.status === 'fulfilled') {
-      const data = tipoRes.value.data.results || tipoRes.value.data
-      // Filtramos comprobantes tipo 'C' (Compras) y excluimos Remitos/Ordenes
-      tiposComprobante.value = data
-        .filter(
-          (t) =>
-            t.clase === 'C' &&
-            !t.nombre.toLowerCase().includes('remito') &&
-            !t.nombre.toLowerCase().includes('orden'),
-        )
-        .map((t) => ({
-          value: t.id,
-          label: t.nombre,
-          fullData: t,
-        }))
-
-      // Auto-selección inicial si hay datos
-      if (tiposComprobante.value.length > 0) {
-        formState.tipo_comprobante = tiposComprobante.value[0].value
-      }
-    }
-  } catch (e) {
-    message.error('Error cargando datos auxiliares')
-  }
-}
-
-// LÓGICA DE NUMERACIÓN
-const esNumeracionManual = computed(() => {
-  if (!formState.tipo_comprobante) return true
-  const selected = tiposComprobante.value.find((t) => t.value === formState.tipo_comprobante)
-  return selected ? !selected.fullData.numeracion_automatica : true
-})
-
-// BÚSQUEDA DE PROVEEDOR
-const filterProveedor = (input, option) => option.label.toLowerCase().includes(input.toLowerCase())
-
-// BÚSQUEDA DE ARTÍCULOS
-const searchArticulos = async (txt) => {
-  if (!txt || txt.length < 3) {
-    productOptions.value = []
-    return
-  }
-  try {
-    const { data } = await axios.get(`http://tenant1.localhost:8000/api/articulos/?search=${txt}`)
-    const list = data.results || data
-    productOptions.value = list.map((a) => ({
-      value: a.cod_articulo,
-      label: a.descripcion,
-      fullData: a,
-    }))
-  } catch (e) {
-    console.error(e)
-  }
-}
-
-const onSelectArticulo = (val, option, index) => {
-  const item = items.value[index]
-  const art = option.fullData
-  if (art) {
-    item.articuloId = art.id
-    item.codigo = art.cod_articulo
-    item.descripcion = art.descripcion
-    let costo = 0
-    if (art.precio_costo) {
-      costo =
-        typeof art.precio_costo === 'object'
-          ? parseFloat(art.precio_costo.amount)
-          : parseFloat(art.precio_costo)
-    }
-    item.precio_costo_unitario = isNaN(costo) ? 0 : costo
-  }
-}
-
-const createEmptyRow = () => ({
-  key: Date.now() + Math.random(),
-  articuloId: null,
-  codigo: '',
-  descripcion: '',
-  cantidad: 1,
-  precio_costo_unitario: 0,
-})
-
-const addItem = () => items.value.push(createEmptyRow())
-const removeItem = (index) => {
-  if (items.value.length > 1) items.value.splice(index, 1)
-  else message.warning('Debe haber al menos una línea')
-}
-
-const totalCompra = computed(() => {
-  return items.value.reduce((acc, item) => acc + item.cantidad * item.precio_costo_unitario, 0)
-})
-
-const proveedorSeleccionado = computed(() => {
-  if (!formState.proveedor) return null
-  return proveedores.value.find((p) => p.value === formState.proveedor)
-})
-
-const onFinish = async () => {
-  if (!formState.proveedor) return message.warning('Seleccione Proveedor')
-  if (!formState.tipo_comprobante) return message.warning('Seleccione Tipo')
-  if (esNumeracionManual.value && (!formState.numero || String(formState.numero).trim() === '')) {
-    return message.warning('Ingrese el Número')
-  }
-
-  const validItems = items.value.filter((i) => i.articuloId)
-  if (validItems.length === 0) return message.warning('Ingrese artículos')
-
-  loading.value = true
-  try {
-    let numeroEnvio = 0
-    if (esNumeracionManual.value) {
-      numeroEnvio = parseInt(formState.numero, 10)
-      if (isNaN(numeroEnvio)) throw new Error('El número debe ser entero')
-    }
-
-    const payload = {
-      ...formState,
-      numero: numeroEnvio,
-      fecha: formState.fecha.format('YYYY-MM-DD'),
-      items: validItems.map((i) => ({
-        articulo: i.articuloId,
-        cantidad: i.cantidad,
-        precio_costo_unitario: i.precio_costo_unitario,
-      })),
-    }
-
-    await axios.post('http://tenant1.localhost:8000/api/comprobantes-compra/', payload)
-    message.success('Factura guardada')
-    items.value = [createEmptyRow()]
-    formState.numero = ''
-    formState.proveedor = null
-  } catch (e) {
-    console.error(e)
-    const errorMsg = e.response?.data ? JSON.stringify(e.response.data) : 'Error al guardar'
-    message.error(errorMsg)
-  } finally {
-    loading.value = false
-  }
+const measureLayout = () => {
+  if (!posRootEl.value) return
+  if (layoutRaf) cancelAnimationFrame(layoutRaf)
+  layoutRaf = requestAnimationFrame(() => {
+    layoutRaf = 0
+    try {
+      const root  = posRootEl.value
+      const rect  = root.getBoundingClientRect()
+      const viewH = window.innerHeight || 800
+      root.style.setProperty('--factura-available-h',
+        `${Math.max(500, Math.floor(viewH - rect.top - 8))}px`)
+      const wrapRect = gridTableWrapEl.value?.getBoundingClientRect()
+      if (wrapRect) tableScrollY.value = Math.max(200, Math.floor(wrapRect.height - 48 - 6))
+    } catch { /* ignore */ }
+  })
 }
 
 onMounted(() => {
-  if (!configStore.currentTheme) configStore.setTheme('light')
-  fetchAuxiliares()
-  addItem()
+  measureLayout()
+  layoutObs = new ResizeObserver(measureLayout)
+  if (posRootEl.value) layoutObs.observe(posRootEl.value)
+  const content = document.querySelector('.ant-layout-content') || document.querySelector('.layout-content')
+  if (content) layoutObs.observe(content)
+  window.addEventListener('resize', measureLayout)
+  cargarAuxiliares()
 })
+
+onUnmounted(() => {
+  if (layoutRaf) cancelAnimationFrame(layoutRaf)
+  layoutObs?.disconnect()
+  window.removeEventListener('resize', measureLayout)
+})
+
+// ─── Modales ──────────────────────────────────────────────────
+const modalProv  = ref(false)
+const modalArt   = ref(false)
+
+// ─── Estado del proveedor ─────────────────────────────────────
+const proveedorId     = ref(null)
+const proveedorNombre = ref('')
+const proveedorCuit   = ref('')
+const proveedorBuscando = ref(false)
+const proveedorOpts   = ref([])
+let provTimer = null
+
+const onBuscarProveedor = (txt) => {
+  if (!txt || txt.length < 3) { proveedorOpts.value = []; return }
+  clearTimeout(provTimer)
+  provTimer = setTimeout(async () => {
+    proveedorBuscando.value = true
+    try {
+      const res = await proveedoresService.listar({ search: txt, page_size: 20 })
+      proveedorOpts.value = (res.data.results ?? res.data).map(p => ({
+        value: p.id,
+        label: p.razon_social,
+        cuit:  p.cuit ?? '',
+        // Formato para a-select
+        title: p.razon_social,
+      }))
+    } finally { proveedorBuscando.value = false }
+  }, 300)
+}
+
+const onSelectProveedor = (val, opt) => {
+  proveedorId.value     = val
+  proveedorNombre.value = opt.label ?? opt.title ?? ''
+  proveedorCuit.value   = opt.cuit ?? ''
+  items.value = [crearFila()]
+}
+
+const onProveedorDesdeModal = (record) => {
+  proveedorId.value     = record.id
+  proveedorNombre.value = record.razon_social
+  proveedorCuit.value   = record.cuit ?? ''
+  items.value = [crearFila()]
+}
+
+// ─── Formulario del comprobante ───────────────────────────────
+const form = reactive({
+  tipo_comprobante: null,
+  deposito:         null,
+  condicion_compra: 'CC',
+  punto_venta:      1,
+  numero:           '',
+  fecha:            new Date().toISOString().slice(0, 10),
+})
+
+const tiposComp  = ref([])
+const depositos  = ref([])
+const loading    = ref(false)
+const submitting = ref(false)
+
+// ─── Ítems de la factura ──────────────────────────────────────
+const items = ref([crearFila()])
+
+// Search state por fila (patrón POS)
+const activeSearchRowKey = ref(null)
+const productOptions     = ref([])
+
+const columns = [
+  { title: '#',          key: 'idx',         width: 44,  align: 'center' },
+  { title: 'Cód/Búsqueda', dataIndex: 'search', width: 260 },
+  { title: 'Descripción',  dataIndex: 'descripcion', ellipsis: true },
+  { title: 'Cant.',        dataIndex: 'cantidad',    width: 95,  align: 'right' },
+  { title: 'Costo',        dataIndex: 'costo',       width: 140, align: 'right' },
+  { title: 'Subtotal',     dataIndex: 'subtotal',    width: 130, align: 'right' },
+  { title: '',             key: 'del',               width: 46,  align: 'center' },
+]
+
+function crearFila() {
+  return {
+    key:        Date.now() + Math.random(),
+    articuloId: null,
+    busqueda:   '',
+    descripcion:'',
+    cantidad:   1,
+    costo:      0,
+  }
+}
+
+const subtotal = computed(() =>
+  items.value.reduce((a, i) => a + Number(i.cantidad) * Number(i.costo), 0)
+)
+const fmtM = (v) =>
+  new Intl.NumberFormat('es-AR', { minimumFractionDigits: 2 }).format(parseFloat(v) || 0)
+
+// Búsqueda de artículo (para el auto-complete de cada fila)
+let artTimer = null
+const onSearchProduct = async (txt) => {
+  if (!txt || txt.length < 2) { productOptions.value = []; return }
+  clearTimeout(artTimer)
+  artTimer = setTimeout(async () => {
+    try {
+      const params = { search: txt, page_size: 15 }
+      if (proveedorId.value) params.proveedor = proveedorId.value
+      const res = await api.get('/api/articulos/', { params })
+      const lista = res.data.results ?? res.data
+      productOptions.value = lista.map(a => ({
+        value:    a.cod_articulo,
+        label:    `${a.cod_articulo} — ${a.descripcion}`,
+        fullData: a,
+      }))
+    } catch { productOptions.value = [] }
+  }, 250)
+}
+
+const onSelectProduct = (val, opt, idx) => {
+  const fila = items.value[idx]
+  if (!fila || !opt?.fullData) return
+  const a = opt.fullData
+  fila.articuloId  = a.id
+  fila.busqueda    = a.cod_articulo
+  fila.descripcion = a.descripcion
+  fila.costo       = parseFloat(a.precio_costo_monto) || 0
+  productOptions.value  = []
+  activeSearchRowKey.value = null
+  // Si esta era la última fila, agregar una nueva
+  if (idx === items.value.length - 1) {
+    nextTick(() => items.value.push(crearFila()))
+  }
+}
+
+// Artículos desde modal
+const onAddItems = ({ items: nuevos, close }) => {
+  const sinAsignar = items.value.filter(f => !f.articuloId)
+  if (sinAsignar.length) items.value = items.value.filter(f => f.articuloId)
+  for (const n of nuevos) {
+    const existe = items.value.find(f => f.articuloId === n.articuloId)
+    if (existe) { existe.cantidad += n.cantidad }
+    else {
+      items.value.push({
+        key: Date.now() + Math.random(),
+        articuloId: n.articuloId, busqueda: n.codigo,
+        descripcion: n.descripcion, cantidad: n.cantidad, costo: n.costo,
+      })
+    }
+  }
+  if (!items.value.length) items.value = [crearFila()]
+  if (close) modalArt.value = false
+}
+
+const agregarFila = () => items.value.push(crearFila())
+const eliminarFila = (i) => {
+  if (items.value.length === 1) { message.warning('Debe haber al menos una línea'); return }
+  items.value.splice(i, 1)
+}
+
+// ─── Auxiliares ───────────────────────────────────────────────
+const cargarAuxiliares = async () => {
+  loading.value = true
+  try {
+    const [tR, dR] = await Promise.allSettled([
+      api.get('/api/tipos-comprobante/'),
+      api.get('/api/inventario/depositos/'),
+    ])
+    if (tR.status === 'fulfilled') {
+      tiposComp.value = (tR.value.data.results ?? tR.value.data)
+        .filter(t => t.clase === 'C')
+        .map(t => ({ value: t.id, label: t.nombre }))
+      if (tiposComp.value.length) form.tipo_comprobante = tiposComp.value[0].value
+    }
+    if (dR.status === 'fulfilled') depositos.value = dR.value.data.results ?? dR.value.data
+  } finally { loading.value = false }
+}
+
+// ─── Guardar ──────────────────────────────────────────────────
+const guardar = async (confirmar = false) => {
+  if (!proveedorId.value)       { message.error('Seleccioná un proveedor.'); return }
+  if (!form.tipo_comprobante)   { message.error('Seleccioná el tipo de comprobante.'); return }
+  const validas = items.value.filter(i => i.articuloId && i.cantidad > 0)
+  if (!validas.length)          { message.error('Agregá al menos un artículo con cantidad.'); return }
+
+  submitting.value = true
+  try {
+    const payload = {
+      proveedor:        proveedorId.value,
+      tipo_comprobante: form.tipo_comprobante,
+      deposito:         form.deposito || null,
+      condicion_compra: form.condicion_compra,
+      punto_venta:      Number(form.punto_venta) || 1,
+      numero:           parseInt(form.numero) || 0,
+      fecha:            form.fecha,
+      estado:           'BR',
+      items:            validas.map(i => ({
+        articulo:       i.articuloId,
+        cantidad:       i.cantidad,
+        costo_unitario: i.costo,
+      })),
+    }
+    const res = await comprobantesCompraService.crear(payload)
+    if (confirmar && res.data.id) {
+      await comprobantesCompraService.confirmar(res.data.id)
+      message.success('Factura confirmada.')
+    } else {
+      message.success('Factura guardada como borrador.')
+    }
+    router.push({ name: 'compras-lista' })
+  } catch (e) {
+    const err = e.response?.data
+    message.error(err && typeof err === 'object'
+      ? Object.entries(err).map(([k,v]) => `${k}: ${Array.isArray(v)?v.join(', '):v}`).join(' | ')
+      : 'No se pudo guardar.')
+  } finally { submitting.value = false }
+}
 </script>
 
 <template>
-  <a-config-provider :theme="themeConfig">
-    <div
-      class="pos-layout"
-      :class="configStore.currentTheme === 'dark' ? 'theme-dark' : 'theme-light'"
-    >
-      <header class="pos-header">
-        <div class="brand-area">
-          <a-button type="text" class="header-btn" @click="router.back()"
-            ><ArrowLeftOutlined
-          /></a-button>
-          <h2>Nueva Factura de Compra</h2>
-          <a-tag class="status-tag">Gestión</a-tag>
+  <div ref="posRootEl" class="factura-root">
+
+    <!-- Modales -->
+    <ProveedorSearchModal v-model:open="modalProv" @select="onProveedorDesdeModal" />
+    <ArticuloComprasModal
+      v-model:open="modalArt"
+      :proveedor-id="proveedorId"
+      @add-items="onAddItems"
+    />
+
+    <div class="factura-body">
+
+      <!-- ══ PANEL IZQUIERDO FIJO ══ -->
+      <section class="left-panel">
+
+        <div class="panel-header">
+          <a-button type="text" size="small" @click="router.push({ name: 'compras-lista' })">
+            <ArrowLeftOutlined /> Volver
+          </a-button>
+          <span class="panel-title"><ShoppingOutlined style="margin-right:6px" />Nueva Factura</span>
         </div>
-      </header>
 
-      <a-spin :spinning="loading">
-        <main class="pos-body">
-          <section class="left-panel">
-            <a-card class="form-card mb-3" :bordered="false">
-              <a-row :gutter="16">
-                <a-col :span="10">
-                  <label class="field-label">Proveedor</label>
-                  <a-select
-                    v-model:value="formState.proveedor"
-                    :options="proveedores"
-                    show-search
-                    placeholder="Buscar..."
-                    :filter-option="filterProveedor"
-                    class="full-width custom-select"
-                    size="large"
-                  >
-                    <template #option="{ label, cuit }"
-                      ><div class="option-row">
-                        <b>{{ label }}</b
-                        ><span class="muted-text">CUIT: {{ cuit }}</span>
-                      </div></template
-                    >
-                  </a-select>
-                </a-col>
-                <a-col :span="5">
-                  <label class="field-label">Tipo Comp.</label>
-                  <a-select
-                    v-model:value="formState.tipo_comprobante"
-                    :options="tiposComprobante"
-                    size="large"
-                    class="full-width"
-                  />
-                </a-col>
-                <a-col :span="3"
-                  ><label class="field-label">Pto. Venta</label
-                  ><a-input-number
-                    v-model:value="formState.punto_venta"
-                    class="full-width"
-                    size="large"
-                /></a-col>
-                <a-col :span="3"
-                  ><label class="field-label">Número</label
-                  ><a-input
-                    v-model:value="formState.numero"
-                    size="large"
-                    :disabled="!esNumeracionManual"
-                /></a-col>
-                <a-col :span="3"
-                  ><label class="field-label">Fecha</label
-                  ><a-date-picker
-                    v-model:value="formState.fecha"
-                    class="full-width"
-                    format="DD/MM/YYYY"
-                    size="large"
-                /></a-col>
-              </a-row>
-            </a-card>
-
-            <a-card
-              class="grid-card"
-              :bordered="false"
-              :bodyStyle="{ padding: 0, flex: 1, display: 'flex', flexDirection: 'column' }"
+        <!-- Proveedor -->
+        <div class="panel-block">
+          <div class="block-label">Proveedor</div>
+          <div class="prov-search-row">
+            <a-select
+              v-model:value="proveedorId"
+              show-search
+              :filter-option="false"
+              placeholder="Buscar (mín. 3 letras)…"
+              :loading="proveedorBuscando"
+              :not-found-content="proveedorBuscando ? undefined : (proveedorOpts.length ? null : 'Escribí para buscar')"
+              style="flex:1"
+              @search="onBuscarProveedor"
+              @select="onSelectProveedor"
             >
-              <a-table
-                :columns="columns"
-                :data-source="items"
-                :pagination="false"
-                rowKey="key"
-                size="middle"
-                :scroll="{ y: 400 }"
+              <a-select-option
+                v-for="p in proveedorOpts" :key="p.value" :value="p.value"
+                :label="p.label" :cuit="p.cuit"
               >
-                <template #bodyCell="{ column, record, index }">
-                  <template v-if="column.dataIndex === 'articulo'">
-                    <a-auto-complete
-                      v-model:value="record.codigo"
-                      :options="productOptions"
-                      @search="searchArticulos"
-                      @select="(val, opt) => onSelectArticulo(val, opt, index)"
-                      class="full-width input-grid"
-                      :bordered="false"
-                      placeholder="🔍 Buscar..."
-                    >
-                      <template #option="{ fullData }"
-                        ><div class="prod-option">
-                          <span class="prod-name">{{ fullData.descripcion }}</span
-                          ><span class="prod-code">{{ fullData.cod_articulo }}</span>
-                        </div></template
-                      >
-                    </a-auto-complete>
-                    <div v-if="record.descripcion" class="prod-desc-sub">
-                      {{ record.descripcion }}
+                <div class="prov-opt">
+                  <span class="prov-opt-name">{{ p.label }}</span>
+                  <span class="prov-opt-cuit">{{ p.cuit }}</span>
+                </div>
+              </a-select-option>
+            </a-select>
+            <a-tooltip title="Búsqueda avanzada">
+              <a-button @click="modalProv = true"><SearchOutlined /></a-button>
+            </a-tooltip>
+          </div>
+
+          <div v-if="proveedorId" class="prov-badge">
+            <span class="prov-badge-name">{{ proveedorNombre }}</span>
+            <span v-if="proveedorCuit" class="prov-badge-cuit">{{ proveedorCuit }}</span>
+          </div>
+
+          <a-alert v-if="proveedorId" type="info" banner
+            message="Artículos filtrados para este proveedor"
+            style="margin-top:8px;font-size:11px" />
+        </div>
+
+        <!-- Datos del comprobante -->
+        <div class="panel-block">
+          <div class="block-label">Comprobante</div>
+          <div class="form-stack">
+
+            <div class="form-field">
+              <label>Tipo</label>
+              <a-select v-model:value="form.tipo_comprobante" style="width:100%">
+                <a-select-option v-for="t in tiposComp" :key="t.value" :value="t.value">
+                  {{ t.label }}
+                </a-select-option>
+              </a-select>
+            </div>
+
+            <div class="form-row">
+              <div class="form-field">
+                <label>Pto. Venta</label>
+                <a-input-number v-model:value="form.punto_venta" :min="1" style="width:100%" />
+              </div>
+              <div class="form-field">
+                <label>Número</label>
+                <a-input v-model:value="form.numero" placeholder="00000001" allow-clear />
+              </div>
+            </div>
+
+            <div class="form-field">
+              <label>Fecha</label>
+              <a-input type="date" v-model:value="form.fecha" style="width:100%" />
+            </div>
+
+            <div class="form-field">
+              <label>Condición</label>
+              <a-radio-group v-model:value="form.condicion_compra" button-style="solid" style="width:100%">
+                <a-radio-button value="CO" style="width:50%;text-align:center">Contado</a-radio-button>
+                <a-radio-button value="CC" style="width:50%;text-align:center">Cta. Cte.</a-radio-button>
+              </a-radio-group>
+            </div>
+
+            <div class="form-field">
+              <label>Depósito</label>
+              <a-select v-model:value="form.deposito" allow-clear style="width:100%"
+                placeholder="Principal por defecto">
+                <a-select-option v-for="d in depositos" :key="d.id" :value="d.id">
+                  {{ d.nombre }}
+                </a-select-option>
+              </a-select>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Total -->
+        <div class="panel-total">
+          <span class="total-lbl">TOTAL</span>
+          <span class="total-val">$ {{ fmtM(subtotal) }}</span>
+        </div>
+
+        <!-- Acciones -->
+        <div class="panel-actions">
+          <a-button block @click="router.push({ name: 'compras-lista' })">Cancelar</a-button>
+          <a-button block :loading="submitting" @click="guardar(false)">
+            <SaveOutlined /> Guardar borrador
+          </a-button>
+          <a-button block type="primary" :loading="submitting" @click="guardar(true)">
+            <SaveOutlined /> Confirmar
+          </a-button>
+        </div>
+
+      </section>
+
+      <!-- ══ PANEL DERECHO — TABLA ══ -->
+      <section class="right-panel">
+
+        <div class="grid-topbar">
+          <a-button class="search-articles-btn" @click="modalArt = true">
+            <AppstoreOutlined /> Buscar artículos (modal avanzado)
+          </a-button>
+          <a-button size="small" @click="agregarFila">
+            <PlusOutlined /> Fila
+          </a-button>
+          <span class="grid-hint">
+            {{ items.filter(i => i.articuloId).length }} artículo(s) cargado(s)
+          </span>
+        </div>
+
+        <div ref="gridTableWrapEl" class="grid-table-wrap">
+          <a-table
+            :columns="columns"
+            :data-source="items"
+            :pagination="false"
+            row-key="key"
+            size="middle"
+            :scroll="{ y: tableScrollY }"
+            :custom-row="(r) => ({ class: r.articuloId ? 'row-filled' : 'row-empty' })"
+          >
+            <template #bodyCell="{ column, record, index }">
+
+              <!-- Índice -->
+              <template v-if="column.key === 'idx'">
+                <span class="row-idx">{{ index + 1 }}</span>
+              </template>
+
+              <!-- Búsqueda / código (auto-complete por fila, patrón POS) -->
+              <template v-if="column.dataIndex === 'search'">
+                <a-auto-complete
+                  v-model:value="record.busqueda"
+                  :options="activeSearchRowKey === record.key ? productOptions : []"
+                  :disabled="!proveedorId"
+                  style="width:100%"
+                  :bordered="false"
+                  :default-active-first-option="false"
+                  :get-popup-container="() => posRootEl || document.body"
+                  @search="(v) => { activeSearchRowKey = record.key; onSearchProduct(v) }"
+                  @focus="() => { activeSearchRowKey = record.key }"
+                  @select="(val, opt) => onSelectProduct(val, opt, index)"
+                >
+                  <a-input :placeholder="proveedorId ? 'Código o nombre…' : 'Seleccioná proveedor primero'">
+                    <template #prefix><BarcodeOutlined /></template>
+                  </a-input>
+                  <template #option="{ label, fullData }">
+                    <div class="product-option-row">
+                      <span class="prod-desc">{{ fullData.descripcion }}</span>
+                      <div class="prod-meta">
+                        <span class="prod-cod">{{ fullData.cod_articulo }}</span>
+                        <span class="prod-stock">Stock: {{ fullData.stock_disponible ?? '—' }}</span>
+                      </div>
                     </div>
                   </template>
-                  <template v-if="column.dataIndex === 'cantidad'">
-                    <a-input-number
-                      v-model:value="record.cantidad"
-                      :min="0"
-                      :bordered="false"
-                      class="full-width centered-input"
-                    />
-                  </template>
-                  <template v-if="column.dataIndex === 'precio'">
-                    <a-input-number
-                      v-model:value="record.precio_costo_unitario"
-                      :min="0"
-                      :bordered="false"
-                      class="full-width right-align-input"
-                      :formatter="(v) => `$ ${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')"
-                      :parser="(v) => v.replace(/\$\s?|(,*)/g, '')"
-                    />
-                  </template>
-                  <template v-if="column.dataIndex === 'subtotal'">
-                    <span class="subtotal-text"
-                      >$
-                      {{
-                        (record.cantidad * record.precio_costo_unitario).toLocaleString('es-AR', {
-                          minimumFractionDigits: 2,
-                        })
-                      }}</span
-                    >
-                  </template>
-                  <template v-if="column.dataIndex === 'actions'">
-                    <a-button type="text" danger size="small" @click="removeItem(index)"
-                      ><DeleteOutlined
-                    /></a-button>
-                  </template>
-                </template>
-              </a-table>
-              <div class="grid-footer">
-                <a-button type="dashed" block @click="addItem" size="large"
-                  ><PlusOutlined /> Agregar Ítem (F2)</a-button
-                >
-              </div>
-            </a-card>
-          </section>
+                </a-auto-complete>
+              </template>
 
-          <section class="right-panel">
-            <div class="info-card">
-              <div class="card-header"><ShopOutlined /> Proveedor</div>
-              <div v-if="proveedorSeleccionado" class="provider-details">
-                <h3>{{ proveedorSeleccionado.label }}</h3>
-                <p>CUIT: {{ proveedorSeleccionado.cuit }}</p>
-                <a-tag color="blue">{{ proveedorSeleccionado.condicion }}</a-tag>
-              </div>
-              <div v-else class="empty-state">
-                <ShopOutlined style="font-size: 30px; opacity: 0.3" />
-                <p>Seleccione un proveedor</p>
-              </div>
-            </div>
+              <!-- Descripción -->
+              <template v-if="column.dataIndex === 'descripcion'">
+                <span class="desc-cell">{{ record.descripcion || '—' }}</span>
+              </template>
 
-            <div class="totals-widget">
-              <div class="row">
-                <span>Subtotal</span
-                ><span
-                  >$ {{ totalCompra.toLocaleString('es-AR', { minimumFractionDigits: 2 }) }}</span
-                >
-              </div>
-              <div class="row text-muted"><span>Impuestos</span><span>$ 0,00</span></div>
-              <div class="divider"></div>
-              <div class="total-big">
-                <small>TOTAL</small>
-                <div class="amount">
-                  $ {{ totalCompra.toLocaleString('es-AR', { minimumFractionDigits: 2 }) }}
-                </div>
-              </div>
-              <a-button
-                type="primary"
-                block
-                size="large"
-                class="save-btn"
-                @click="onFinish"
-                :loading="loading"
-                ><SaveOutlined /> GUARDAR FACTURA</a-button
-              >
-            </div>
-          </section>
-        </main>
-      </a-spin>
+              <!-- Cantidad -->
+              <template v-if="column.dataIndex === 'cantidad'">
+                <a-input-number
+                  v-model:value="record.cantidad"
+                  :min="0.001" :precision="3"
+                  :bordered="false"
+                  style="width:85px"
+                />
+              </template>
+
+              <!-- Costo -->
+              <template v-if="column.dataIndex === 'costo'">
+                <a-input-number
+                  v-model:value="record.costo"
+                  :min="0" :precision="4"
+                  :bordered="false"
+                  addon-before="$"
+                  style="width:120px"
+                />
+              </template>
+
+              <!-- Subtotal -->
+              <template v-if="column.dataIndex === 'subtotal'">
+                <span class="subtotal-cell">
+                  $ {{ fmtM(record.cantidad * record.costo) }}
+                </span>
+              </template>
+
+              <!-- Eliminar -->
+              <template v-if="column.key === 'del'">
+                <a-button type="text" danger size="small" @click="eliminarFila(index)">
+                  <DeleteOutlined />
+                </a-button>
+              </template>
+
+            </template>
+
+            <!-- Fila de totales -->
+            <template #summary>
+              <a-table-summary fixed>
+                <a-table-summary-row>
+                  <a-table-summary-cell :index="0" :col-span="5" align="right">
+                    <strong class="summary-label">TOTAL</strong>
+                  </a-table-summary-cell>
+                  <a-table-summary-cell :index="5" align="right">
+                    <strong class="summary-total">$ {{ fmtM(subtotal) }}</strong>
+                  </a-table-summary-cell>
+                  <a-table-summary-cell :index="6" />
+                </a-table-summary-row>
+              </a-table-summary>
+            </template>
+
+          </a-table>
+        </div>
+
+      </section>
+
     </div>
-  </a-config-provider>
+  </div>
 </template>
 
 <style scoped>
-/* ESTILOS ENTERPRISE BLUE & DARK */
-.theme-light {
-  --bg-app: #f1f5f9;
-  --bg-header-gradient: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
-  --text-header: #ffffff;
-  --bg-card: #ffffff;
-  --text-primary: #1e293b;
-  --text-secondary: #64748b;
-  --border-color: #e2e8f0;
-  --bg-totals: #1e293b;
-  --text-totals: #ffffff;
-  --dropdown-bg: #ffffff;
-  --dropdown-text: #333333;
-  --table-header-bg: #f8fafc;
-  --table-header-text: #475569;
-  --row-hover: #f1f5f9;
-}
-.theme-dark {
-  --bg-app: #020617;
-  --bg-header-gradient: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-  --text-header: #f8fafc;
-  --bg-card: #1e293b;
-  --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --border-color: #334155;
-  --bg-totals: #0f172a;
-  --text-totals: #f8fafc;
-  --dropdown-bg: #1e293b;
-  --dropdown-text: #f1f5f9;
-  --table-header-bg: #0f172a;
-  --table-header-text: #cbd5e1;
-  --row-hover: #334155;
+/* ─── Layout fijo idéntico a VentaPOSView ─────────────────── */
+.factura-root {
+  --factura-available-h: 100vh;
+  height: var(--factura-available-h);
+  min-height: var(--factura-available-h);
+  overflow: hidden;
+  background: var(--surface-0, transparent);
+  display: flex;
+  flex-direction: column;
 }
 
-.pos-layout {
-  height: 100vh;
+.factura-body {
   display: flex;
-  flex-direction: column;
-  background-color: var(--bg-app);
-  color: var(--text-primary);
-  font-family: 'Inter', sans-serif;
-  transition:
-    background 0.3s,
-    color 0.3s;
-}
-.pos-header {
-  background: var(--bg-header-gradient);
-  height: 60px;
-  padding: 0 20px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  color: var(--text-header);
-}
-.brand-area {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.header-btn {
-  color: var(--text-header);
-  font-size: 1.2rem;
-}
-.brand-area h2 {
-  margin: 0;
-  color: var(--text-header);
-  font-size: 1.25rem;
-  font-weight: 700;
-}
-.status-tag {
-  background: rgba(255, 255, 255, 0.15);
-  color: var(--text-header);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  font-weight: 600;
-}
-.pos-body {
-  flex: 1;
-  display: flex;
-  padding: 16px;
-  gap: 16px;
+  gap: 14px;
+  padding: 14px;
   overflow: hidden;
+  height: 100%;
+  min-height: 0;
 }
+
+/* Panel izquierdo FIJO */
 .left-panel {
-  flex: 3;
+  width: 300px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
   overflow-y: auto;
+  background: var(--surface-0, #fff);
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--text-2, #94a3b8) 20%, transparent);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.07);
 }
+
+/* Panel derecho con scroll en tabla */
 .right-panel {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  min-width: 300px;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--surface-0, #fff);
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--text-2, #94a3b8) 20%, transparent);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.07);
 }
-.form-card,
-.grid-card {
-  border-radius: 12px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-  background-color: var(--bg-card);
-  color: var(--text-primary);
-  border: 1px solid var(--border-color);
+
+/* ─── Panel izquierdo secciones ─────────────────────────────── */
+.panel-header {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 12px 16px 10px;
+  border-bottom: 1px solid var(--border, #f0f0f0);
+  flex-shrink: 0;
 }
-.field-label {
-  display: block;
-  font-size: 0.8rem;
+.panel-title { font-size: 14px; font-weight: 700; color: var(--text-0); }
+
+.panel-block {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border, #f0f0f0);
+}
+.block-label {
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--text-2); margin-bottom: 8px;
+}
+
+.prov-search-row { display: flex; gap: 6px; }
+.prov-opt   { display: flex; flex-direction: column; gap: 1px; }
+.prov-opt-name { font-size: 13px; font-weight: 600; color: var(--text-0); }
+.prov-opt-cuit { font-size: 11px; color: var(--text-2); }
+.prov-badge {
+  margin-top: 8px; padding: 8px 10px;
+  background: var(--surface-1, #f8fafc);
+  border-radius: 7px; border: 1px solid var(--border);
+}
+.prov-badge-name { display: block; font-size: 13px; font-weight: 700; color: var(--text-0); }
+.prov-badge-cuit { font-size: 11px; color: var(--text-2); }
+
+.form-stack { display: flex; flex-direction: column; gap: 10px; }
+.form-field { display: flex; flex-direction: column; gap: 3px; }
+.form-field label { font-size: 11px; font-weight: 600; color: var(--text-2); }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+.panel-total {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 16px; border-bottom: 1px solid var(--border, #f0f0f0);
+  flex-shrink: 0;
+}
+.total-lbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--text-2); }
+.total-val { font-size: 22px; font-weight: 800; color: rgba(var(--accent-rgb, 99,102,241), 1); font-variant-numeric: tabular-nums; }
+
+.panel-actions {
+  padding: 12px 16px; display: flex; flex-direction: column;
+  gap: 8px; flex-shrink: 0;
+}
+
+/* ─── Panel derecho ─────────────────────────────────────────── */
+.grid-topbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border, #f0f0f0);
+  background: var(--surface-1, #f8fafc);
+}
+.search-articles-btn {
   font-weight: 600;
-  color: var(--text-secondary);
-  margin-bottom: 4px;
+  border-color: rgba(var(--accent-rgb, 99,102,241), 0.4);
+  color: rgba(var(--accent-rgb, 99,102,241), 1);
 }
-.full-width {
-  width: 100%;
+.grid-hint { font-size: 12px; color: var(--text-2); margin-left: auto; }
+
+.grid-table-wrap {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
 }
-.mb-3 {
-  margin-bottom: 12px;
-}
-.mt-4 {
-  margin-top: 16px;
-}
-:deep(.ant-table) {
-  background: transparent;
-  color: var(--text-primary);
-}
+
+/* Tabla */
 :deep(.ant-table-thead > tr > th) {
-  background: var(--table-header-bg) !important;
-  color: var(--table-header-text) !important;
-  border-bottom: 1px solid var(--border-color) !important;
-  font-weight: 600;
+  background: var(--surface-1, #f8fafc) !important;
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--text-2);
 }
-:deep(.ant-table-tbody > tr > td) {
-  border-bottom: 1px solid var(--border-color) !important;
-  transition: background 0.2s;
-}
-:deep(.ant-table-tbody > tr:hover > td) {
-  background: var(--row-hover) !important;
-}
-:deep(.ant-empty-description) {
-  color: var(--text-secondary);
-}
-.prod-desc-sub {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  margin-top: -5px;
-}
-.subtotal-text {
-  font-weight: 700;
-  color: var(--text-primary);
-}
-:deep(.centered-input input) {
-  text-align: center !important;
-  color: var(--text-primary) !important;
-}
-:deep(.right-align-input input) {
-  text-align: right !important;
-  color: var(--text-primary) !important;
-}
-.theme-dark :deep(.ant-input),
-.theme-dark :deep(.ant-input-number-input),
-.theme-dark :deep(.ant-select-selector),
-.theme-dark :deep(.ant-picker) {
-  background-color: transparent !important;
-  color: var(--text-primary) !important;
-  border-color: var(--border-color) !important;
-}
-.info-card {
-  background: var(--bg-card);
-  border-radius: 12px;
-  padding: 20px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-  border: 1px solid var(--border-color);
-}
-.card-header {
-  font-size: 0.85rem;
-  text-transform: uppercase;
-  letter-spacing: 1px;
-  font-weight: 700;
-  color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-color);
-  padding-bottom: 10px;
-  margin-bottom: 15px;
-}
-.provider-details h3 {
-  margin: 0;
-  font-size: 1.1rem;
-  color: var(--text-primary);
-}
-.empty-state {
-  text-align: center;
-  color: var(--text-secondary);
-  padding: 20px;
-}
-.totals-widget {
-  background: var(--bg-totals);
-  color: var(--text-totals);
-  border-radius: 12px;
-  padding: 24px;
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-  margin-top: auto;
-}
-.totals-widget .row {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 8px;
-  font-size: 0.95rem;
-}
-.text-muted {
-  opacity: 0.6;
-}
-.divider {
-  height: 1px;
-  background: rgba(255, 255, 255, 0.1);
-  margin: 15px 0;
-}
-.total-big {
-  text-align: right;
-  margin-bottom: 20px;
-}
-.total-big small {
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  opacity: 0.7;
-}
-.total-big .amount {
-  font-size: 2rem;
-  font-weight: 800;
-  color: #60a5fa;
-  line-height: 1.1;
-}
-.theme-light .amount-display {
-  color: #93c5fd;
-}
-.save-btn {
-  background: #3b82f6;
-  border: none;
-  font-weight: 700;
-  height: 50px;
-  font-size: 1.1rem;
-  box-shadow: 0 4px 6px rgba(59, 130, 246, 0.4);
-}
-.save-btn:hover {
-  background: #2563eb;
-}
-:deep(.ant-select-dropdown) {
-  background-color: var(--bg-card) !important;
-}
-:deep(.ant-select-item) {
-  color: var(--text-primary) !important;
-}
-:deep(.ant-select-item-option-active) {
-  background-color: rgba(59, 130, 246, 0.2) !important;
-}
-.prod-option {
-  display: flex;
-  justify-content: space-between;
-}
-.prod-name {
-  font-weight: 600;
-  color: var(--text-primary);
-}
-.prod-code {
-  color: var(--text-secondary);
-  font-size: 0.8rem;
-}
-.option-row {
-  display: flex;
-  justify-content: space-between;
-  width: 100%;
-  color: var(--text-primary);
-}
-.muted-text {
-  color: var(--text-secondary);
-  font-size: 0.8rem;
-}
+:deep(.row-filled td) { background: var(--surface-0) !important; }
+:deep(.row-empty td)  { background: color-mix(in srgb, var(--surface-1, #f8fafc) 60%, transparent) !important; }
+:deep(.ant-table-summary tr td) { background: var(--surface-1, #f1f5f9) !important; }
+
+.row-idx      { font-size: 11px; color: var(--text-2); font-weight: 600; }
+.desc-cell    { font-size: 12px; color: var(--text-1); }
+.subtotal-cell { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 13px; }
+.summary-label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-2); }
+.summary-total { font-size: 15px; font-variant-numeric: tabular-nums; color: rgba(var(--accent-rgb,99,102,241),1); }
+
+/* Auto-complete option styles */
+.product-option-row { display: flex; flex-direction: column; gap: 2px; }
+.prod-desc  { font-size: 13px; font-weight: 600; color: var(--text-0); }
+.prod-meta  { display: flex; gap: 10px; }
+.prod-cod   { font-family: monospace; font-size: 11px; color: var(--text-2); }
+.prod-stock { font-size: 11px; color: var(--text-2); }
 </style>

@@ -62,6 +62,15 @@ const toggleTheme = () => {
 /** Usuario */
 const userLabel = computed(() => authStore.user?.name || authStore.user?.username || 'Usuario')
 
+// ── Visibilidad de secciones del menú según permisos de Django ──
+// canAccess(app1, app2, ...) → true si el usuario tiene CUALQUIER permiso
+// en alguna de esas apps (o es superuser/staff)
+const canSeeVentas     = computed(() => authStore.canAccess('ventas'))
+const canSeeCompras    = computed(() => authStore.canAccess('compras'))
+const canSeeInventario = computed(() => authStore.canAccess('inventario', 'compras'))
+const canSeeFinanzas   = computed(() => authStore.canAccess('finanzas'))
+const canSeeAdmin      = computed(() => authStore.isAdmin)
+
 const handleLogout = () => {
   authStore.logout()
   router.push('/login')
@@ -188,7 +197,7 @@ const themeConfig = computed(() => {
             <PieChartOutlined /> <span>Dashboard</span>
           </a-menu-item>
 
-          <a-sub-menu key="sub-ventas">
+          <a-sub-menu v-if="canSeeVentas" key="sub-ventas">
             <template #title>
               <span><ShopOutlined /><span>Ventas</span></span>
             </template>
@@ -210,48 +219,125 @@ const themeConfig = computed(() => {
             >
               Comprobantes
             </a-menu-item>
-            <a-menu-item key="clientes-lista">Clientes</a-menu-item>
+            <a-menu-item key="clientes-lista">
+              <router-link :to="{ name: 'clientes-lista' }">Clientes</router-link>
+            </a-menu-item>
           </a-sub-menu>
 
-          <a-sub-menu key="sub-inventario">
+          <a-sub-menu v-if="canSeeInventario" key="sub-inventario">
             <template #title>
               <span><TagsOutlined /><span>Inventario</span></span>
             </template>
-            <a-menu-item key="articulo-lista" @click="router.push({ name: 'articulo-lista' })"
-              >Artículos</a-menu-item
-            >
-            <a-menu-item key="articulo-crear" @click="router.push({ name: 'articulo-crear' })"
-              >Nuevo Artículo</a-menu-item
-            >
-            <a-menu-item key="marcas-lista">Marcas & Rubros</a-menu-item>
+
+            <a-menu-item key="inventario-dashboard"
+              @click="router.push({ name: 'inventario-dashboard' })">
+              Panel de Inventario
+            </a-menu-item>
+
+            <a-menu-item key="articulo-lista"
+              @click="router.push({ name: 'articulo-lista' })">
+              Artículos
+            </a-menu-item>
+
+            <a-menu-item key="articulo-crear"
+              @click="router.push({ name: 'articulo-crear' })">
+              Nuevo Artículo
+            </a-menu-item>
+
+            <a-sub-menu key="sub-inv-movimientos">
+              <template #title>Movimientos de Stock</template>
+              <a-menu-item key="ajustes-lista"
+                @click="router.push({ name: 'ajustes-lista' })">
+                Ajustes Manuales
+              </a-menu-item>
+              <a-menu-item key="transferencias-lista"
+                @click="router.push({ name: 'transferencias-lista' })">
+                Transferencias
+              </a-menu-item>
+              <a-menu-item key="ledger-lista"
+                @click="router.push({ name: 'ledger-lista' })">
+                Historial (Ledger)
+              </a-menu-item>
+            </a-sub-menu>
+
+            <a-sub-menu key="sub-inv-reportes">
+              <template #title>Reportes</template>
+              <a-menu-item key="alertas-reposicion"
+                @click="router.push({ name: 'alertas-reposicion' })">
+                Alertas de Reposición
+              </a-menu-item>
+              <a-menu-item key="inventario-valorizacion"
+                @click="router.push({ name: 'inventario-valorizacion' })">
+                Valorización
+              </a-menu-item>
+              <a-menu-item key="kardex"
+                @click="router.push({ name: 'kardex' })">
+                Kardex
+              </a-menu-item>
+            </a-sub-menu>
+
+            <a-sub-menu key="sub-inv-config">
+              <template #title>Configuración</template>
+              <a-menu-item key="depositos-lista"
+                @click="router.push({ name: 'marcas-rubros' })">
+                Marcas y Rubros
+              </a-menu-item>
+              <a-menu-item key="depositos-lista"
+                @click="router.push({ name: 'depositos-lista' })">
+                Depósitos
+              </a-menu-item>
+              <a-menu-item key="actualizacion-precios"
+                @click="router.push({ name: 'actualizacion-precios' })">
+                Actualizar Precios
+              </a-menu-item>
+            </a-sub-menu>
+
           </a-sub-menu>
 
-          <a-sub-menu key="sub-compras">
+          <a-sub-menu v-if="canSeeCompras" key="sub-compras">
             <template #title>
               <span><ShopOutlined /><span>Compras</span></span>
             </template>
-            <a-sub-menu key="sub-compras-prov">
-              <template #title>Admin. Proveedores</template>
-              <a-menu-item key="proveedores-lista">
-                <router-link :to="{ name: 'proveedores-lista' }">Proveedores</router-link>
+
+            <a-menu-item key="proveedores-lista"
+              @click="router.push({ name: 'proveedores-lista' })">
+              Proveedores
+            </a-menu-item>
+
+            <a-menu-item key="compras-lista"
+              @click="router.push({ name: 'compras-lista' })">
+              Comprobantes de Compra
+            </a-menu-item>
+
+            <a-menu-item key="listas-precios"
+              @click="router.push({ name: 'listas-precios' })">
+              Listas de Precios
+            </a-menu-item>
+
+            <a-menu-item key="ordenes-pago-lista"
+              @click="router.push({ name: 'ordenes-pago-lista' })">
+              Órdenes de Pago
+            </a-menu-item>
+
+            <a-sub-menu key="sub-compras-nuevo">
+              <template #title>Nuevo Comprobante</template>
+              <a-menu-item key="compra-factura-nueva"
+                @click="router.push({ name: 'compra-factura-nueva' })">
+                Factura Proveedor
+              </a-menu-item>
+              <a-menu-item key="compra-remito-nuevo"
+                @click="router.push({ name: 'compra-remito-nuevo' })">
+                Remito Ingreso
+              </a-menu-item>
+              <a-menu-item key="compra-orden-nueva"
+                @click="router.push({ name: 'compra-orden-nueva' })">
+                Orden de Compra
               </a-menu-item>
             </a-sub-menu>
 
-            <a-sub-menu key="sub-compras-docs">
-              <template #title>Comprobantes</template>
-              <a-menu-item key="compra-orden">
-                <router-link :to="{ name: 'compra-orden-nueva' }">Orden de Compra</router-link>
-              </a-menu-item>
-              <a-menu-item key="compra-factura">
-                <router-link :to="{ name: 'compra-factura-nueva' }">Factura Proveedor</router-link>
-              </a-menu-item>
-              <a-menu-item key="compra-remito">
-                <router-link :to="{ name: 'compra-remito-nuevo' }">Remito Ingreso</router-link>
-              </a-menu-item>
-            </a-sub-menu>
           </a-sub-menu>
 
-          <a-sub-menu key="sub-finanzas">
+          <a-sub-menu v-if="canSeeFinanzas" key="sub-finanzas">
             <template #title>
               <span><BankOutlined /><span>Finanzas</span></span>
             </template>
@@ -265,9 +351,14 @@ const themeConfig = computed(() => {
 
           <div class="menu-divider"></div>
 
-          <a-menu-item key="config">
+          <a-menu-item v-if="canSeeAdmin" key="configuracion" @click="router.push({ name: 'configuracion' })">
             <SettingOutlined />
             <span>Configuración</span>
+          </a-menu-item>
+
+          <a-menu-item v-if="canSeeAdmin" key="usuarios" @click="router.push({ name: 'usuarios' })">
+            <UserOutlined />
+            <span>Usuarios y Roles</span>
           </a-menu-item>
         </a-menu>
       </a-layout-sider>

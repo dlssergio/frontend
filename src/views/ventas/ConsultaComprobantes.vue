@@ -1,29 +1,13 @@
 <script setup>
 /**
  * ConsultaComprobantes.vue — Centro de Control de Comprobantes
- * Versión Enterprise — superior a SAP B1, Dynamics 365, Odoo, Calipso
- *
- * [E1]  PDF con auth JWT — blob via Axios (resuelve 401 de window.open)
- * [E2]  Quick-ranges: Hoy / Semana / Mes / Trimestre / Año con 1 click
- * [E3]  Chips de filtros activos — búsqueda facetada visible y removible
- * [E4]  Filtros guardados como favoritos con nombre (localStorage)
- * [E5]  Columnas configurables: mostrar/ocultar + persistencia localStorage
- * [E6]  Selección múltiple + barra de acciones en batch
- * [E7]  Exportar CSV con BOM UTF-8 (compatible Excel Argentina)
- * [E8]  KPIs dinámicos: total período, con/sin CAE, CAE por vencer
- * [E9]  Semáforo CAE: días restantes con color (ok / alerta / crítico / vencido)
- * [E10] Estado de cobro: Cobrado / Parcial / Pendiente (más granular que estado)
- * [E11] Envío de email por comprobante con 1 click
- * [E12] Columnas ordenables server-side
- * [E13] Totales de página en footer de tabla
- * [E14] Atajos de teclado: F5 actualizar, Ctrl+E exportar, Esc cerrar detalle
- * [E15] Loading per-row para PDF (no bloquea toda la tabla)
- * [E16] Panel de detalle deslizante con info completa + acciones
+ * Versión Enterprise
  */
 
 import { ref, reactive, computed, watch, onMounted, onUnmounted } from 'vue'
 import dayjs from 'dayjs'
 import { message } from 'ant-design-vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   SearchOutlined,
   ReloadOutlined,
@@ -31,8 +15,6 @@ import {
   EyeOutlined,
   CloseOutlined,
   CheckCircleOutlined,
-  ClockCircleOutlined,
-  StopOutlined,
   WarningOutlined,
   FileTextOutlined,
   UserOutlined,
@@ -48,10 +30,15 @@ import {
   ThunderboltOutlined,
   ExclamationCircleOutlined,
   CheckOutlined,
+  SwapOutlined,
+  LoadingOutlined,
 } from '@ant-design/icons-vue'
 import api from '@/services/api'
+import { fetchCliente } from '@/services/clientes'
 
-// ── Constants ──────────────────────────────────────────────────────────────
+const route = useRoute()
+const router = useRouter()
+
 const ESTADOS = [
   { value: '', label: 'Todos los estados' },
   { value: 'CN', label: 'Confirmado' },
@@ -78,7 +65,6 @@ const PAGE_SIZE_OPTIONS = ['10', '20', '50', '100']
 const STORAGE_FAVS_KEY = 'cc_favoritos_v1'
 const STORAGE_COLS_KEY = 'cc_columnas_v1'
 
-// ── Column definitions ─────────────────────────────────────────────────────
 const ALL_COLUMNS = [
   { key: 'numero_completo', title: 'Comprobante', width: 155, fixedLeft: true },
   { key: 'fecha', title: 'Fecha', width: 108, sortable: true },
@@ -92,7 +78,6 @@ const ALL_COLUMNS = [
   { key: 'actions', title: '', width: 92, fixedRight: true },
 ]
 
-// ── State ──────────────────────────────────────────────────────────────────
 const loading = ref(false)
 const loadingEmail = ref(null)
 const rows = ref([])
@@ -111,50 +96,114 @@ const filters = reactive({
 
 const pagination = reactive({ current: 1, pageSize: 20 })
 
-// [E15] Per-row PDF loading — no bloquea la tabla completa
 const loadingPdfIds = ref(new Set())
-
-// [E6] Bulk selection
 const selectedRowKeys = ref([])
 
-// [E4] Favoritos
+// ── Conversión ────────────────────────────────────────────────────────────────
+const reglasPorComprobante   = ref({})   // { [id]: [] }
+const loadingReglas          = ref(null) // id cargando
+const convirtiendo           = ref(null) // id convirtiendo
+const modalConversionOpen    = ref(false)
+const conversionRecord       = ref(null)
+const conversionRegla        = ref(null)
+const conversionObs          = ref('')
+
+const cargarReglas = async (record) => {
+  if (reglasPorComprobante.value[record.id]) return
+  loadingReglas.value = record.id
+  try {
+    const { data } = await api.get(
+      `/api/comprobantes-venta/${record.id}/reglas-conversion/`
+    )
+    reglasPorComprobante.value[record.id] = data
+  } catch { /* silencioso */ } finally {
+    loadingReglas.value = null
+  }
+}
+
+const abrirConversion = (record, regla) => {
+  conversionRecord.value = record
+  conversionRegla.value  = regla
+  conversionObs.value    = ''
+  modalConversionOpen.value = true
+}
+
+const ejecutarConversion = async () => {
+  if (!conversionRecord.value || !conversionRegla.value) return
+  convirtiendo.value = conversionRecord.value.id
+  try {
+    const { data } = await api.post(
+      `/api/comprobantes-venta/${conversionRecord.value.id}/convertir/`,
+      {
+        regla_id:     conversionRegla.value.id,
+        observaciones: conversionObs.value || undefined,
+      }
+    )
+    message.success(data.mensaje || 'Comprobante creado correctamente')
+    modalConversionOpen.value = false
+    // Navegar al nuevo comprobante en ConsultaComprobantes filtrando por id
+    await fetchData()
+  } catch (e) {
+    message.error(e?.response?.data?.error || 'Error al convertir')
+  } finally {
+    convirtiendo.value = null
+  }
+}
 const favoritos = ref([])
 const favNombreInput = ref('')
 const showFavPopover = ref(false)
 
-// [E5] Column config
 const visibleCols = ref(new Set(ALL_COLUMNS.map((c) => c.key)))
 const showColConfig = ref(false)
 
-// [E16] Detail panel
 const detailOpen = ref(false)
 const detailRecord = ref(null)
 
-// ── Filter chips [E3] ──────────────────────────────────────────────────────
+const clienteContextId = computed(() => {
+  const raw = route.query.cliente
+  return raw ? String(raw) : ''
+})
+
+const clienteContext = ref(null)
+
 const filterChips = computed(() => {
   const chips = []
-  if (filters.estado)
+  if (clienteContextId.value) {
+    chips.push({
+      key: 'cliente_context',
+      label: `Cliente: ${clienteContext.value?.entidad?.razon_social || `#${clienteContextId.value}`}`,
+    })
+  }
+  if (filters.estado) {
     chips.push({ key: 'estado', label: ESTADOS.find((e) => e.value === filters.estado)?.label })
-  if (filters.tipo_comprobante)
+  }
+  if (filters.tipo_comprobante) {
     chips.push({
       key: 'tipo_comprobante',
       label: tiposComprobante.value.find((t) => t.value === filters.tipo_comprobante)?.label,
     })
-  if (filters.condicion_venta)
+  }
+  if (filters.condicion_venta) {
     chips.push({
       key: 'condicion_venta',
       label: CONDICIONES.find((c) => c.value === filters.condicion_venta)?.label,
     })
-  if (filters.fecha_desde || filters.fecha_hasta)
+  }
+  if (filters.fecha_desde || filters.fecha_hasta) {
     chips.push({
       key: 'fechas',
       label: `${filters.fecha_desde?.format('DD/MM') || '…'} → ${filters.fecha_hasta?.format('DD/MM') || '…'}`,
     })
+  }
   if (filters.search) chips.push({ key: 'search', label: `"${filters.search}"` })
   return chips
 })
 
 const removeChip = (key) => {
+  if (key === 'cliente_context') {
+    router.push({ name: 'consulta-comprobantes', query: { ...route.query, cliente: undefined } })
+    return
+  }
   if (key === 'estado') filters.estado = ''
   if (key === 'tipo_comprobante') filters.tipo_comprobante = ''
   if (key === 'condicion_venta') filters.condicion_venta = ''
@@ -166,7 +215,6 @@ const removeChip = (key) => {
   onFilterChange()
 }
 
-// ── KPIs [E8] ──────────────────────────────────────────────────────────────
 const kpis = computed(() => {
   const r = rows.value
   return {
@@ -182,7 +230,6 @@ const kpis = computed(() => {
   }
 })
 
-// ── Dynamic columns [E5] ───────────────────────────────────────────────────
 const columns = computed(() =>
   ALL_COLUMNS.filter((c) => visibleCols.value.has(c.key)).map((c) => ({
     title: c.title,
@@ -195,7 +242,6 @@ const columns = computed(() =>
   })),
 )
 
-// ── Helpers ────────────────────────────────────────────────────────────────
 const moneyAR = (n) =>
   (Number(n) || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
@@ -212,7 +258,6 @@ const condicionLabel = { CO: 'Contado', CC: 'Cta. Cte.' }
 const clienteNombre = (r) => r.cliente_nombre_override || r.cliente?.entidad?.razon_social || '—'
 const clienteCuit = (r) => r.cliente_cuit_override || r.cliente?.entidad?.cuit || '—'
 
-// [E10] Estado de cobro granular
 const cobroStatus = (r) => {
   if (r.estado === 'AN') return { label: 'Anulado', cls: 'cobro--anulado' }
   if (r.estado === 'BR') return { label: 'Borrador', cls: 'cobro--borrador' }
@@ -223,18 +268,15 @@ const cobroStatus = (r) => {
   return { label: 'Pendiente', cls: 'cobro--pendiente' }
 }
 
-// [E9] Semáforo de vencimiento CAE
 const caeVencimiento = (r) => {
   if (!r.cae || !r.vto_cae) return null
   const dias = dayjs(r.vto_cae).diff(dayjs(), 'day')
-  if (dias < 0)
-    return { dias: Math.abs(dias), label: `Vencido hace ${Math.abs(dias)}d`, cls: 'cae-vencido' }
+  if (dias < 0) return { dias: Math.abs(dias), label: `Vencido hace ${Math.abs(dias)}d`, cls: 'cae-vencido' }
   if (dias <= 3) return { dias, label: `Vence en ${dias}d`, cls: 'cae-critico' }
   if (dias <= 7) return { dias, label: `Vence en ${dias}d`, cls: 'cae-alerta' }
   return { dias, label: `CAE ok (${dias}d)`, cls: 'cae-ok' }
 }
 
-// ── PDF con JWT blob [E1] [E15] ────────────────────────────────────────────
 const openPdf = async (record) => {
   if (!record?.id || loadingPdfIds.value.has(record.id)) return
   const next = new Set(loadingPdfIds.value)
@@ -258,7 +300,6 @@ const openPdf = async (record) => {
   }
 }
 
-// ── Email 1 click [E11] ────────────────────────────────────────────────────
 const enviarEmail = async (record) => {
   if (loadingEmail.value) return
   loadingEmail.value = record.id
@@ -273,7 +314,6 @@ const enviarEmail = async (record) => {
   }
 }
 
-// ── Export CSV [E7] ────────────────────────────────────────────────────────
 const exportCsv = (soloSeleccionados = false) => {
   const data =
     soloSeleccionados && selectedRowKeys.value.length
@@ -327,7 +367,6 @@ const exportCsv = (soloSeleccionados = false) => {
   )
 }
 
-// ── Fetch ──────────────────────────────────────────────────────────────────
 let searchTimer = null
 
 const buildParams = () => {
@@ -339,6 +378,7 @@ const buildParams = () => {
   if (filters.condicion_venta) p.condicion_venta = filters.condicion_venta
   if (filters.fecha_desde) p.fecha_desde = filters.fecha_desde.format('YYYY-MM-DD')
   if (filters.fecha_hasta) p.fecha_hasta = filters.fecha_hasta.format('YYYY-MM-DD')
+  if (clienteContextId.value) p.cliente = clienteContextId.value
   return p
 }
 
@@ -369,7 +409,20 @@ const fetchTiposComprobante = async () => {
   }
 }
 
-// ── Event handlers ─────────────────────────────────────────────────────────
+const loadClienteContext = async () => {
+  if (!clienteContextId.value) {
+    clienteContext.value = null
+    return
+  }
+  try {
+    const { data } = await fetchCliente(clienteContextId.value)
+    clienteContext.value = data
+  } catch (e) {
+    console.error(e)
+    clienteContext.value = null
+  }
+}
+
 const onSearch = () => {
   pagination.current = 1
   fetchData()
@@ -388,12 +441,12 @@ const onFilterChange = () => {
 const onTableChange = (pag, _, sorter) => {
   pagination.current = pag.current || 1
   pagination.pageSize = pag.pageSize || 20
-  if (sorter?.field)
+  if (sorter?.field) {
     filters.ordering = sorter.order === 'descend' ? `-${sorter.field}` : sorter.field
+  }
   fetchData()
 }
 
-// [E2] Quick ranges
 const applyQuickRange = (range) => {
   filters.fecha_desde = range.from()
   filters.fecha_hasta = range.to()
@@ -424,7 +477,15 @@ watch(
   onFilterChange,
 )
 
-// ── Favoritos [E4] ─────────────────────────────────────────────────────────
+watch(
+  () => route.query.cliente,
+  async () => {
+    pagination.current = 1
+    await loadClienteContext()
+    await fetchData()
+  },
+)
+
 const loadFavoritos = () => {
   try {
     favoritos.value = JSON.parse(localStorage.getItem(STORAGE_FAVS_KEY) || '[]')
@@ -474,7 +535,6 @@ const deleteFavorito = (id) => {
   localStorage.setItem(STORAGE_FAVS_KEY, JSON.stringify(favoritos.value))
 }
 
-// ── Column config [E5] ─────────────────────────────────────────────────────
 const FIXED_COLS = new Set(['numero_completo', 'actions'])
 
 const loadColConfig = () => {
@@ -493,8 +553,8 @@ const toggleCol = (key) => {
   localStorage.setItem(STORAGE_COLS_KEY, JSON.stringify([...s]))
 }
 
-// ── Detail panel [E16] ─────────────────────────────────────────────────────
 const openDetail = (r) => {
+  cargarReglas(r)
   detailRecord.value = r
   detailOpen.value = true
 }
@@ -503,7 +563,6 @@ const closeDetail = () => {
   detailRecord.value = null
 }
 
-// ── Bulk selection [E6] ────────────────────────────────────────────────────
 const rowSelection = computed(() => ({
   selectedRowKeys: selectedRowKeys.value,
   onChange: (keys) => {
@@ -511,7 +570,6 @@ const rowSelection = computed(() => ({
   },
 }))
 
-// ── Keyboard shortcuts [E14] ───────────────────────────────────────────────
 const handleKey = (e) => {
   if (e.key === 'F5') {
     e.preventDefault()
@@ -526,11 +584,21 @@ const handleKey = (e) => {
   }
 }
 
-// ── Lifecycle ──────────────────────────────────────────────────────────────
+function clearClienteContext() {
+  router.push({
+    name: 'consulta-comprobantes',
+    query: {
+      ...route.query,
+      cliente: undefined,
+    },
+  })
+}
+
 onMounted(async () => {
   loadFavoritos()
   loadColConfig()
   await fetchTiposComprobante()
+  await loadClienteContext()
   await fetchData()
   window.addEventListener('keydown', handleKey)
 })
@@ -539,7 +607,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
 
 <template>
   <div class="cc-root">
-    <!-- ══════════ HEADER ══════════════════════════════════════════════════ -->
     <header class="cc-header">
       <div class="cc-header-left">
         <div class="cc-icon-wrap"><FileTextOutlined /></div>
@@ -555,18 +622,17 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
       </div>
 
       <div class="cc-header-actions">
-        <!-- Favoritos -->
         <a-popover
           v-model:open="showFavPopover"
           trigger="click"
           placement="bottomRight"
           :overlayStyle="{ width: '290px' }"
         >
-          <template #title
-            ><div class="fav-pop-head">
+          <template #title>
+            <div class="fav-pop-head">
               <StarFilled style="color: #f59e0b" /> Favoritos
-            </div></template
-          >
+            </div>
+          </template>
           <template #content>
             <div class="fav-pop-body">
               <div v-if="!favoritos.length" class="fav-empty">Sin favoritos guardados.</div>
@@ -583,9 +649,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
                   size="small"
                   @press-enter="saveFavorito"
                 />
-                <a-button type="primary" size="small" @click="saveFavorito"
-                  ><CheckOutlined
-                /></a-button>
+                <a-button type="primary" size="small" @click="saveFavorito"><CheckOutlined /></a-button>
               </div>
             </div>
           </template>
@@ -596,7 +660,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
           </a-button>
         </a-popover>
 
-        <!-- Columnas -->
         <a-popover
           v-model:open="showColConfig"
           trigger="click"
@@ -611,17 +674,15 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
                   :checked="visibleCols.has(col.key)"
                   :disabled="FIXED_COLS.has(col.key)"
                   @change="toggleCol(col.key)"
-                  >{{ col.title || '(acciones)' }}</a-checkbox
                 >
+                  {{ col.title || '(acciones)' }}
+                </a-checkbox>
               </div>
             </div>
           </template>
-          <a-button class="hdr-btn"
-            ><SettingOutlined /><span class="hdr-btn-txt">Columnas</span></a-button
-          >
+          <a-button class="hdr-btn"><SettingOutlined /><span class="hdr-btn-txt">Columnas</span></a-button>
         </a-popover>
 
-        <!-- Exportar -->
         <a-dropdown>
           <a-button class="hdr-btn hdr-btn--export">
             <DownloadOutlined /><span class="hdr-btn-txt">Exportar</span>
@@ -644,7 +705,27 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
       </div>
     </header>
 
-    <!-- ══════════ KPIs [E8] ═══════════════════════════════════════════════ -->
+    <div v-if="clienteContextId" class="cliente-context-banner">
+      <div class="cliente-context-banner__left">
+        <UserOutlined />
+        <div class="cliente-context-banner__content">
+          <div class="cliente-context-banner__label">Vista contextual</div>
+          <div class="cliente-context-banner__value">
+            {{
+              clienteContext?.entidad?.razon_social
+                || `Cliente #${clienteContextId}`
+            }}
+          </div>
+        </div>
+      </div>
+
+      <div class="cliente-context-banner__right">
+        <a-button size="small" @click="clearClienteContext">
+          Quitar filtro cliente
+        </a-button>
+      </div>
+    </div>
+
     <div class="cc-kpis">
       <div class="kpi-card kpi-card--accent">
         <span class="kpi-label">Total período</span>
@@ -658,21 +739,20 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
       </div>
       <div class="kpi-card" :class="{ 'kpi-card--warn': kpis.sinCae > 0 }">
         <span class="kpi-label">Sin CAE</span>
-        <span class="kpi-val" :class="kpis.sinCae > 0 ? 'kpi-val--warn' : 'kpi-val--ok'">{{
-          kpis.sinCae
-        }}</span>
+        <span class="kpi-val" :class="kpis.sinCae > 0 ? 'kpi-val--warn' : 'kpi-val--ok'">
+          {{ kpis.sinCae }}
+        </span>
         <span class="kpi-sub">requieren acción</span>
       </div>
       <div class="kpi-card" :class="{ 'kpi-card--alert': kpis.caePorVencer > 0 }">
         <span class="kpi-label">CAE por vencer</span>
-        <span class="kpi-val" :class="kpis.caePorVencer > 0 ? 'kpi-val--alert' : 'kpi-val--ok'">{{
-          kpis.caePorVencer
-        }}</span>
+        <span class="kpi-val" :class="kpis.caePorVencer > 0 ? 'kpi-val--alert' : 'kpi-val--ok'">
+          {{ kpis.caePorVencer }}
+        </span>
         <span class="kpi-sub">vencen en ≤ 7 días</span>
       </div>
     </div>
 
-    <!-- ══════════ FILTROS ═════════════════════════════════════════════════ -->
     <div class="cc-filter-bar">
       <a-input
         v-model:value="filters.search"
@@ -682,10 +762,10 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
         class="filter-search"
         @change="onSearchInput"
         @press-enter="onSearch"
-        ><template #prefix><SearchOutlined /></template
-      ></a-input>
+      >
+        <template #prefix><SearchOutlined /></template>
+      </a-input>
 
-      <!-- Quick ranges [E2] -->
       <div class="quick-ranges">
         <button
           v-for="r in QUICK_RANGES"
@@ -733,7 +813,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
       <a-button @click="onReset" size="large">Limpiar</a-button>
     </div>
 
-    <!-- Chips de filtros activos [E3] -->
     <div v-if="filterChips.length > 0" class="cc-chips">
       <span class="chips-label"><FilterOutlined /> Filtros activos:</span>
       <div v-for="chip in filterChips" :key="chip.key" class="chip">
@@ -743,24 +822,20 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
       <button class="chips-clear" @click="onReset" type="button">Limpiar todo</button>
     </div>
 
-    <!-- Batch bar [E6] -->
     <transition name="batch-slide">
       <div v-if="selectedRowKeys.length > 0" class="batch-bar">
-        <span class="batch-count"
-          ><CheckOutlined /> {{ selectedRowKeys.length }} seleccionado{{
-            selectedRowKeys.length !== 1 ? 's' : ''
-          }}</span
-        >
+        <span class="batch-count">
+          <CheckOutlined /> {{ selectedRowKeys.length }} seleccionado{{ selectedRowKeys.length !== 1 ? 's' : '' }}
+        </span>
         <div class="batch-actions">
-          <a-button size="small" @click="exportCsv(true)"
-            ><DownloadOutlined /> Exportar selección</a-button
-          >
+          <a-button size="small" @click="exportCsv(true)">
+            <DownloadOutlined /> Exportar selección
+          </a-button>
           <a-button size="small" @click="selectedRowKeys = []">Deseleccionar</a-button>
         </div>
       </div>
     </transition>
 
-    <!-- ══════════ TABLA + DETALLE ═════════════════════════════════════════ -->
     <div class="cc-body" :class="{ 'cc-body--split': detailOpen }">
       <div class="cc-table-wrap">
         <a-table
@@ -850,9 +925,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
               >
                 <span class="cae-badge" :class="caeVencimiento(record)?.cls || 'cae-ok'">
                   <span class="cae-dot" />
-                  {{
-                    caeVencimiento(record)?.dias != null ? `${caeVencimiento(record).dias}d` : 'OK'
-                  }}
+                  {{ caeVencimiento(record)?.dias != null ? `${caeVencimiento(record).dias}d` : 'OK' }}
                 </span>
               </a-tooltip>
               <a-tooltip v-else-if="record.afip_error" :title="record.afip_error">
@@ -890,11 +963,47 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
                     <MailOutlined />
                   </a-button>
                 </a-tooltip>
+                <!-- Conversión -->
+                <a-dropdown
+                  v-if="record.estado !== 'AN'"
+                  trigger="click"
+                  @visibleChange="(v) => v && cargarReglas(record)"
+                >
+                  <a-tooltip title="Convertir en...">
+                    <a-button type="text" size="small" class="act-btn">
+                      <LoadingOutlined v-if="loadingReglas === record.id" />
+                      <SwapOutlined v-else />
+                    </a-button>
+                  </a-tooltip>
+                  <template #overlay>
+                    <a-menu>
+                      <template v-if="loadingReglas === record.id">
+                        <a-menu-item disabled>Cargando...</a-menu-item>
+                      </template>
+                      <template v-else-if="(reglasPorComprobante[record.id] || []).length">
+                        <a-menu-item
+                          v-for="regla in reglasPorComprobante[record.id]"
+                          :key="regla.id"
+                          :disabled="!regla.tiene_serie_activa"
+                          @click="abrirConversion(record, regla)"
+                        >
+                          <SwapOutlined style="margin-right:6px" />
+                          {{ regla.etiqueta }}
+                          <span v-if="!regla.tiene_serie_activa" style="color:#ef4444;font-size:11px;margin-left:4px">
+                            (sin serie)
+                          </span>
+                        </a-menu-item>
+                      </template>
+                      <template v-else>
+                        <a-menu-item disabled>Sin conversiones disponibles</a-menu-item>
+                      </template>
+                    </a-menu>
+                  </template>
+                </a-dropdown>
               </div>
             </template>
           </template>
 
-          <!-- Totales de página [E13] -->
           <template #summary>
             <a-table-summary fixed>
               <a-table-summary-row class="summary-row">
@@ -912,7 +1021,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
         </a-table>
       </div>
 
-      <!-- ══════════ PANEL DETALLE [E16] ════════════════════════════════ -->
       <transition name="detail-slide">
         <aside v-if="detailOpen && detailRecord" class="cc-detail">
           <div class="detail-hdr">
@@ -929,27 +1037,15 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
 
           <div class="detail-pills">
             <div class="pill">
-              <CalendarOutlined class="pill-ic" /><span>{{
-                fmtFechaHora(detailRecord.fecha)
-              }}</span>
+              <CalendarOutlined class="pill-ic" /><span>{{ fmtFechaHora(detailRecord.fecha) }}</span>
             </div>
             <div class="pill">
-              <TagOutlined class="pill-ic" /><span>{{
-                detailRecord.tipo_comprobante?.nombre || '—'
-              }}</span>
+              <TagOutlined class="pill-ic" /><span>{{ detailRecord.tipo_comprobante?.nombre || '—' }}</span>
             </div>
-            <div
-              class="pill"
-              :class="detailRecord.condicion_venta === 'CC' ? 'pill--cc' : 'pill--co'"
-            >
-              <DollarOutlined class="pill-ic" /><span>{{
-                condicionLabel[detailRecord.condicion_venta] || '—'
-              }}</span>
+            <div class="pill" :class="detailRecord.condicion_venta === 'CC' ? 'pill--cc' : 'pill--co'">
+              <DollarOutlined class="pill-ic" /><span>{{ condicionLabel[detailRecord.condicion_venta] || '—' }}</span>
             </div>
-            <div
-              class="pill cobro-pill"
-              :class="cobroStatus(detailRecord).cls.replace('cobro', 'cobro')"
-            >
+            <div class="pill cobro-pill" :class="cobroStatus(detailRecord).cls.replace('cobro', 'cobro')">
               {{ cobroStatus(detailRecord).label }}
             </div>
           </div>
@@ -957,16 +1053,13 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
           <div class="detail-sec">
             <div class="detail-sec-title"><UserOutlined /> Cliente</div>
             <div class="kv">
-              <span class="kv-k">Razón Social</span
-              ><span class="kv-v">{{ clienteNombre(detailRecord) }}</span>
+              <span class="kv-k">Razón Social</span><span class="kv-v">{{ clienteNombre(detailRecord) }}</span>
             </div>
             <div class="kv">
-              <span class="kv-k">CUIT / DNI</span
-              ><span class="kv-v kv-mono">{{ clienteCuit(detailRecord) }}</span>
+              <span class="kv-k">CUIT / DNI</span><span class="kv-v kv-mono">{{ clienteCuit(detailRecord) }}</span>
             </div>
             <div v-if="detailRecord.cliente_email_override" class="kv">
-              <span class="kv-k">Email</span
-              ><span class="kv-v">{{ detailRecord.cliente_email_override }}</span>
+              <span class="kv-k">Email</span><span class="kv-v">{{ detailRecord.cliente_email_override }}</span>
             </div>
           </div>
 
@@ -995,8 +1088,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
           <div class="detail-sec">
             <div class="detail-sec-title"><DollarOutlined /> Importes</div>
             <div class="kv">
-              <span class="kv-k">Subtotal neto</span
-              ><span class="kv-v kv-num">$ {{ moneyAR(detailRecord.subtotal) }}</span>
+              <span class="kv-k">Subtotal neto</span><span class="kv-v kv-num">$ {{ moneyAR(detailRecord.subtotal) }}</span>
             </div>
             <div class="kv kv--total">
               <span class="kv-k">Total</span>
@@ -1018,8 +1110,8 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
                 <div class="afip-vto" :class="caeVencimiento(detailRecord)?.cls">
                   Vence: {{ fmtFecha(detailRecord.vto_cae) }}
                   <span v-if="caeVencimiento(detailRecord)">
-                    — {{ caeVencimiento(detailRecord).label }}</span
-                  >
+                    — {{ caeVencimiento(detailRecord).label }}
+                  </span>
                 </div>
               </div>
             </div>
@@ -1033,6 +1125,26 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
           <div v-if="detailRecord.observaciones" class="detail-sec">
             <div class="detail-sec-title">Observaciones</div>
             <p class="detail-obs">{{ detailRecord.observaciones }}</p>
+          </div>
+
+          <!-- Conversiones disponibles -->
+          <div
+            v-if="detailRecord.estado !== 'AN' && (reglasPorComprobante[detailRecord.id] || []).length"
+            class="detail-sec"
+          >
+            <div class="detail-sec-title"><SwapOutlined /> Convertir en</div>
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <a-button
+                v-for="regla in (reglasPorComprobante[detailRecord.id] || [])"
+                :key="regla.id"
+                :disabled="!regla.tiene_serie_activa"
+                block
+                @click="abrirConversion(detailRecord, regla)"
+              >
+                <SwapOutlined /> {{ regla.etiqueta }}
+                <span v-if="!regla.tiene_serie_activa" style="color:#ef4444;font-size:11px;margin-left:4px">(sin serie activa)</span>
+              </a-button>
+            </div>
           </div>
 
           <div class="detail-footer">
@@ -1058,16 +1170,60 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
       </transition>
     </div>
 
-    <!-- Shortcuts hint [E14] -->
     <div class="cc-hint">
       <ThunderboltOutlined />
       <kbd>F5</kbd> actualizar · <kbd>Ctrl+E</kbd> exportar CSV · <kbd>Esc</kbd> cerrar detalle
     </div>
   </div>
+  <!-- Modal conversión -->
+  <a-modal
+    v-model:open="modalConversionOpen"
+    :title="conversionRegla?.etiqueta || 'Convertir comprobante'"
+    ok-text="Confirmar conversión"
+    cancel-text="Cancelar"
+    :confirm-loading="!!convirtiendo"
+    @ok="ejecutarConversion"
+  >
+    <div v-if="conversionRecord && conversionRegla" style="display:flex;flex-direction:column;gap:14px;padding:4px 0">
+      <a-descriptions :column="1" size="small" bordered>
+        <a-descriptions-item label="Comprobante origen">
+          {{ conversionRecord.numero_completo }}
+        </a-descriptions-item>
+        <a-descriptions-item label="Cliente">
+          {{ conversionRecord.cliente?.entidad?.razon_social || conversionRecord.cliente_nombre_override || '—' }}
+        </a-descriptions-item>
+        <a-descriptions-item label="Total origen">
+          $ {{ moneyAR(conversionRecord.total) }}
+        </a-descriptions-item>
+        <a-descriptions-item label="Se creará">
+          <strong>{{ conversionRegla.tipo_destino_nombre }}</strong> en estado Borrador
+        </a-descriptions-item>
+        <a-descriptions-item label="Copia ítems">
+          {{ conversionRegla.copia_items ? 'Sí' : 'No' }}
+        </a-descriptions-item>
+      </a-descriptions>
+      <div>
+        <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:4px">
+          Observaciones (opcional)
+        </div>
+        <a-textarea
+          v-model:value="conversionObs"
+          placeholder="Podés agregar una nota al comprobante destino..."
+          :rows="3"
+        />
+      </div>
+      <a-alert
+        type="info"
+        show-icon
+        :message="conversionRegla?.confirmar_automaticamente
+          ? 'El nuevo comprobante se creará y confirmará automáticamente.'
+          : 'El nuevo comprobante se creará como Borrador. Podrás revisarlo y confirmarlo desde Consulta de Comprobantes.'"
+      />
+    </div>
+  </a-modal>
 </template>
 
 <style scoped>
-/* ── Root ──────────────────────────────────────────────────────────────────── */
 .cc-root {
   --acc: 99, 102, 241;
   --r: 8px;
@@ -1079,7 +1235,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
   min-height: 100%;
 }
 
-/* ── Header ────────────────────────────────────────────────────────────────── */
 .cc-header {
   display: flex;
   align-items: center;
@@ -1167,7 +1322,40 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
   }
 }
 
-/* ── KPIs ──────────────────────────────────────────────────────────────────── */
+.cliente-context-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-radius: var(--r);
+  background: rgba(var(--acc), 0.06);
+  border: 1px solid rgba(var(--acc), 0.18);
+}
+.cliente-context-banner__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: rgba(var(--acc), 1);
+}
+.cliente-context-banner__content {
+  display: flex;
+  flex-direction: column;
+}
+.cliente-context-banner__label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 800;
+  opacity: 0.8;
+}
+.cliente-context-banner__value {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--text-0);
+}
+
 .cc-kpis {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -1222,7 +1410,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
   color: var(--text-2);
 }
 
-/* ── Filter bar ────────────────────────────────────────────────────────────── */
 .cc-filter-bar {
   display: flex;
   align-items: center;
@@ -1261,7 +1448,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
   color: rgba(var(--acc), 1);
 }
 
-/* ── Filter chips ──────────────────────────────────────────────────────────── */
 .cc-chips {
   display: flex;
   align-items: center;
@@ -1315,7 +1501,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
   color: #ef4444;
 }
 
-/* ── Batch bar ─────────────────────────────────────────────────────────────── */
 .batch-slide-enter-active,
 .batch-slide-leave-active {
   transition: all 0.2s ease;
@@ -1345,7 +1530,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
   gap: 8px;
 }
 
-/* ── Body ──────────────────────────────────────────────────────────────────── */
 .cc-body {
   display: grid;
   grid-template-columns: 1fr;
@@ -1399,7 +1583,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
   font-variant-numeric: tabular-nums;
 }
 
-/* Cells */
 .numero-badge {
   font-family: ui-monospace, monospace;
   font-size: 12px;
@@ -1588,7 +1771,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
   margin: 0;
 }
 
-/* ── Detail panel ──────────────────────────────────────────────────────────── */
 .detail-slide-enter-active,
 .detail-slide-leave-active {
   transition: all 0.25s ease;
@@ -1900,7 +2082,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
   font-weight: 700;
 }
 
-/* ── Favoritos ─────────────────────────────────────────────────────────────── */
 .fav-pop-head {
   display: flex;
   align-items: center;
@@ -1963,7 +2144,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
   padding-top: 8px;
 }
 
-/* ── Column config ─────────────────────────────────────────────────────────── */
 .col-config-list {
   display: flex;
   flex-direction: column;
@@ -1973,7 +2153,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
   font-size: 13px;
 }
 
-/* ── Shortcuts hint ────────────────────────────────────────────────────────── */
 .cc-hint {
   font-size: 11px;
   color: var(--text-2);
@@ -1994,7 +2173,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
   color: var(--text-1);
 }
 
-/* ── Responsive ────────────────────────────────────────────────────────────── */
 @media (max-width: 1280px) {
   .cc-kpis {
     grid-template-columns: repeat(2, 1fr);

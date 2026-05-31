@@ -42,6 +42,7 @@ import {
   CompressOutlined,
   FilePdfOutlined,
   CheckCircleOutlined,
+  MailOutlined,
 } from '@ant-design/icons-vue'
 import dayjs from 'dayjs'
 import { message, Modal, theme as antdTheme } from 'ant-design-vue'
@@ -125,6 +126,14 @@ const imageZoomOpen = ref(false)
 const pendingPagos = ref([])
 const pendingRecargos = ref(0)
 const pendingDescuentos = ref(0)
+const descuentoGlobal     = ref(0)
+const descuentoGlobalModo = ref('pct')  // 'pct' | 'monto'
+const precioModo = ref('neto')  // 'neto' | 'final'  — toggle precio neto vs con IVA en tabla
+const observacionesPedido = ref('')
+
+watch(descuentoGlobal, () => {
+  resetPendingCobroPreview()
+})
 
 /** ─── Modo enfoque ──────────────────────────────────────────────────────────── */
 const focusMode = ref(false)
@@ -336,6 +345,17 @@ const clienteInfo = computed(() =>
     : null,
 )
 const clientePermiteCtaCte = computed(() => Boolean(clienteInfo.value?.permite_cta_cte))
+// Muestra precio con IVA según configuración de la situación IVA del cliente
+const mostrarPrecioConIva = computed(() =>
+  Boolean(clienteInfo.value?.mostrar_precio_con_iva)
+)
+const formatPrecioDisplay = (v, record) => {
+  if (mostrarPrecioConIva.value && record?.articuloId) {
+    const conIva = Number(v) * (1 + (Number(record.ivaRate) || 21) / 100)
+    return `$ ${conIva.toFixed(2)}`.replace(RE_PRICE_FORMAT, ',')
+  }
+  return `$ ${v}`.replace(RE_PRICE_FORMAT, ',')
+}
 const isClienteGenerico = computed(() => {
   const cod = clienteInfo.value?.codigo_cliente ?? clienteInfo.value?.codigo ?? ''
   return cod === CODIGO_CLIENTE_GENERICO
@@ -641,6 +661,8 @@ const loadClienteGenerico = async () => {
       label: ent?.razon_social,
       cuit: ent?.cuit,
       condicion: ent?.situacion_iva?.nombre || '',
+      codigo_afip_iva: ent?.situacion_iva?.codigo_afip ?? null,
+      mostrar_precio_con_iva: ent?.situacion_iva?.mostrar_precio_con_iva ?? false,
       permite_cta_cte: permite,
       codigo_cliente: generico?.codigo_cliente ?? CODIGO_CLIENTE_GENERICO,
       saldo: generico?.saldo ?? 0,
@@ -672,6 +694,8 @@ const buscarClientes = async (busqueda = '') => {
         label: ent?.razon_social,
         cuit: ent?.cuit,
         condicion: ent?.situacion_iva?.nombre || '',
+        codigo_afip_iva: ent?.situacion_iva?.codigo_afip ?? null,
+        mostrar_precio_con_iva: ent?.situacion_iva?.mostrar_precio_con_iva ?? false,
         permite_cta_cte: permite,
         codigo_cliente: c?.codigo_cliente ?? '',
         saldo: c.saldo ?? 0,
@@ -719,6 +743,8 @@ const loadClientModal = async () => {
         razon_social: ent?.razon_social,
         cuit: ent?.cuit,
         condicion: ent?.situacion_iva?.nombre || '',
+        codigo_afip_iva: ent?.situacion_iva?.codigo_afip ?? null,
+        mostrar_precio_con_iva: ent?.situacion_iva?.mostrar_precio_con_iva ?? false,
         permite_cta_cte: permite,
         cta_cte: permite ? 'Sí' : 'No',
       }
@@ -743,6 +769,8 @@ const ensureClienteOption = async (clienteId) => {
         label: ent?.razon_social ?? `Cliente #${clienteId}`,
         cuit: ent?.cuit ?? '',
         condicion: ent?.situacion_iva?.nombre ?? '',
+        codigo_afip_iva: ent?.situacion_iva?.codigo_afip ?? null,
+        mostrar_precio_con_iva: ent?.situacion_iva?.mostrar_precio_con_iva ?? false,
         permite_cta_cte: permite,
         codigo_cliente: data?.codigo_cliente ?? '',
         saldo: data?.saldo ?? 0,
@@ -817,6 +845,8 @@ const selectClientFromModal = async (row) => {
       label: row.razon_social,
       cuit: row.cuit,
       condicion: row.condicion,
+      codigo_afip_iva: row.codigo_afip_iva,
+      mostrar_precio_con_iva: row.mostrar_precio_con_iva ?? false,
       permite_cta_cte: Boolean(row.permite_cta_cte),
       saldo: 0,
     },
@@ -961,7 +991,7 @@ const productoHasUsableIva = (producto) =>
       producto?.alicuota_iva != null ||
       producto?.iva_alicuota != null ||
       producto?.iva_porcentaje != null ||
-      producto?.iva_percent != nvalue.ull ||
+      producto?.iva_percent != null ||
       producto?.iva != null ||
       (Array.isArray(producto?.impuestos) && producto.impuestos.length > 0),
   )
@@ -1195,7 +1225,11 @@ const buildPayload = (estado, pagos = [], { dateOnly = false, includeNested = tr
       : formatFechaWithCurrentTime(formState.fecha),
     punto_venta: toInt(formState.puntoVenta, 1),
     estado,
-    condicion_venta: mapCondicionToBackend(condicionPago.value),
+    condicion_venta:      mapCondicionToBackend(condicionPago.value),
+    descuento_global_pct: descuentoGlobalModo.value === 'monto'
+      ? (totales.value.neto > 0 ? Number(((descuentoGlobal.value / totales.value.neto) * 100).toFixed(4)) : 0)
+      : Number(descuentoGlobal.value || 0),
+    ...(observacionesPedido.value.trim() ? { observaciones: observacionesPedido.value.trim() } : {}),
   }
   if (includeNested) {
     payload.items = items.value
@@ -1204,6 +1238,7 @@ const buildPayload = (estado, pagos = [], { dateOnly = false, includeNested = tr
         articulo: item.articuloId,
         cantidad: toInt(item.cantidad, 1),
         precio_unitario_original: toFloat(item.precio, 0),
+        descuento_pct: toFloat(item.descuento, 0),
       }))
     payload.pagos = normalizePagos(pagos)
   }
@@ -1494,6 +1529,17 @@ const onCancelPayment = () => {
 }
 
 /** ─── Modal impresión post-venta ───────────────────────────────────────────── */
+const onEnviarEmailPostVenta = async () => {
+  if (!ventaFinalizada.id) return
+  try {
+    await api.post(`/api/comprobantes-venta/${ventaFinalizada.id}/enviar-email/`)
+    message.success('Comprobante enviado por email correctamente')
+  } catch (e) {
+    const msg = e?.response?.data?.error || e?.response?.data?.detail || 'Error al enviar email'
+    message.error(msg)
+  }
+}
+
 const onPrintAndNew = async () => {
   printModalOpen.value = false
   await abrirPdfComprobante(ventaFinalizada.id)
@@ -1699,13 +1745,17 @@ const taxesRows = computed(() => {
 })
 
 const totales = computed(() => {
-  const neto = items.value.reduce((acc, it) => acc + (it.articuloId ? baseItem(it) : 0), 0)
-  const impuestos = taxesRows.value.reduce((acc, r) => acc + Number(r.amount || 0), 0)
-  const recargos = Number(pendingRecargos.value || 0)
-  const descuentos = Number(pendingDescuentos.value || 0)
-  const total = neto + impuestos
-  const totalFinal = total + recargos - descuentos
-  return { neto, impuestos, recargos, descuentos, total, totalFinal }
+  const neto        = items.value.reduce((acc, it) => acc + (it.articuloId ? baseItem(it) : 0), 0)
+  const descGlobal  = descuentoGlobalModo.value === 'monto'
+    ? Math.min(Number(descuentoGlobal.value || 0), neto)
+    : neto * (Number(descuentoGlobal.value || 0) / 100)
+  const factor      = neto > 0 ? (neto - descGlobal) / neto : 1
+  const impuestos   = taxesRows.value.reduce((acc, r) => acc + Number(r.amount || 0), 0) * factor
+  const recargos    = Number(pendingRecargos.value  || 0)
+  const descuentos  = Number(pendingDescuentos.value || 0)
+  const total       = (neto - descGlobal) + impuestos
+  const totalFinal  = total + recargos - descuentos
+  return { neto, descGlobal, impuestos, recargos, descuentos, total, totalFinal }
 })
 
 /** ─── Modal salida segura ───────────────────────────────────────────────────── */
@@ -2243,15 +2293,15 @@ onUnmounted(() => {
                         @focus="
                           () => {
                             handleSearchFocus(record.key)
-                            selectedRowKey.value = record.key
+                            selectedRowKey = record.key
                             setContext('item', record.key)
                           }
                         "
                         @select="
                           (val, opt) => {
                             onSelectProduct(val, opt, index)
-                            activeSearchRowKey.value = null
-                            productOptions.value = []
+                            activeSearchRowKey = null
+                            productOptions = []
                           }
                         "
                         class="search-autocomplete"
@@ -2260,8 +2310,8 @@ onUnmounted(() => {
                         @keydown.enter.prevent="
                           (e) => {
                             const _cod = (record.codigo || '').trim()
-                            productOptions.value = []
-                            activeSearchRowKey.value = null
+                            productOptions = []
+                            activeSearchRowKey = null
                             if (_cod) handleProductEnterByCode(_cod, index)
                           }
                         "
@@ -2312,8 +2362,16 @@ onUnmounted(() => {
                         v-model:value="record.precio"
                         :bordered="false"
                         class="full-width right-align-input"
-                        :formatter="(v) => `$ ${v}`.replace(RE_PRICE_FORMAT, ',')"
-                        :parser="(v) => v.replace(RE_PRICE_PARSE, '')"
+                        :key="`precio-${record.key}-${mostrarPrecioConIva}`"
+                        :formatter="(v) => formatPrecioDisplay(v, record)"
+                        :parser="(v) => {
+                          const raw = v.replace(RE_PRICE_PARSE, '')
+                          if (mostrarPrecioConIva && record.articuloId) {
+                            const n = Number(raw)
+                            return String(n / (1 + (Number(record.ivaRate) || 21) / 100))
+                          }
+                          return raw
+                        }"
                       />
                     </template>
 
@@ -2325,15 +2383,17 @@ onUnmounted(() => {
                         :max="100"
                         :bordered="false"
                         class="full-width centered-input"
-                        :formatter="(v) => (v > 0 ? `${v}%` : '')"
+                        :formatter="(v) => (v > 0 ? `${v}%` : '0%')"
                         :parser="(v) => v.replace('%', '')"
                       />
                     </template>
 
                     <template v-if="column.dataIndex === 'subtotal'">
-                      <span class="subtotal-val"
-                        >$ {{ money(record.articuloId ? baseItem(record) : 0) }}</span
-                      >
+                      <span class="subtotal-val">
+                        $ {{ money(record.articuloId ? (mostrarPrecioConIva
+                          ? baseItem(record) * (1 + (record.ivaRate || 21) / 100)
+                          : baseItem(record)) : 0) }}
+                      </span>
                     </template>
 
                     <template v-if="column.dataIndex === 'actions'">
@@ -2510,6 +2570,66 @@ onUnmounted(() => {
                   <StopOutlined /><span>Cancelar op.</span>
                 </a-button>
               </div>
+              <div class="side-extras">
+                <div class="side-extra-row">
+                  <span class="side-extra-label">Desc. global</span>
+                  <a-input-group compact style="display:flex; width: auto;">
+                    <a-select
+                      v-model:value="descuentoGlobalModo"
+                      size="small"
+                      style="width: 58px"
+                      :getPopupContainer="() => posRootEl || document.body"
+                      @change="descuentoGlobal = 0"
+                    >
+                      <a-select-option value="pct">%</a-select-option>
+                      <a-select-option value="monto">$</a-select-option>
+                    </a-select>
+                    <a-input-number
+                      v-model:value="descuentoGlobal"
+                      :min="0"
+                      :max="descuentoGlobalModo === 'pct' ? 100 : undefined"
+                      :step="descuentoGlobalModo === 'pct' ? 1 : 100"
+                      :formatter="v => descuentoGlobalModo === 'pct' ? (v > 0 ? `${v}%` : '0%') : `$${v}`"
+                      :parser="v => String(v).replace(/[%$]/g, '')"
+                      size="small"
+                      style="width: 80px"
+                    />
+                  </a-input-group>
+                </div>
+                <div v-if="descuentoGlobal > 0" class="side-extra-hint">
+                  <template v-if="descuentoGlobalModo === 'monto'">
+                    = {{ (totales.neto > 0 ? ((descuentoGlobal / totales.neto) * 100) : 0).toFixed(1) }}% del neto
+                  </template>
+                  <template v-else>
+                    = $ {{ money(totales.descGlobal) }}
+                  </template>
+                </div>
+                <a-popover
+                  trigger="click"
+                  placement="leftBottom"
+                  :getPopupContainer="() => posRootEl || document.body"
+                >
+                  <template #title>Observaciones del pedido</template>
+                  <template #content>
+                    <a-textarea
+                      v-model:value="observacionesPedido"
+                      :rows="4"
+                      placeholder="Notas para el comprobante…"
+                      allow-clear
+                      style="width: 280px; font-size: 12px;"
+                    />
+                  </template>
+                  <a-button
+                    size="small"
+                    :type="observacionesPedido ? 'primary' : 'default'"
+                    :ghost="!!observacionesPedido"
+                    block
+                  >
+                    {{ observacionesPedido ? '📝 Con observaciones' : '📝 Agregar observación' }}
+                  </a-button>
+                </a-popover>
+              </div>
+
               <div v-if="hasStockIssues" class="stock-warning">
                 <svg
                   viewBox="0 0 16 16"
@@ -2551,6 +2671,15 @@ onUnmounted(() => {
               <div v-for="t in taxesRows" :key="t.label" class="footer-row footer-row--sub">
                 <span class="footer-row-label">{{ t.label }}</span>
                 <span class="footer-row-val">$ {{ money(t.amount) }}</span>
+              </div>
+              <div
+                v-if="totales.descGlobal > 0"
+                class="footer-row footer-row--sub footer-row--discount"
+              >
+                <span class="footer-row-label">
+                  Desc. global ({{ descuentoGlobalModo === 'monto' ? `$${descuentoGlobal}` : `${descuentoGlobal}%` }})
+                </span>
+                <span class="footer-row-val">− $ {{ money(totales.descGlobal) }}</span>
               </div>
               <div
                 v-if="totales.recargos > 0"
@@ -2821,7 +2950,10 @@ onUnmounted(() => {
               <a-button size="large" :loading="ventaFinalizada.loadingPdf" @click="onPrintOnly">
                 <FilePdfOutlined /> Solo ver PDF
               </a-button>
-              <a-button size="large" @click="onSkipPrint"> Omitir </a-button>
+              <a-button size="large" @click="onEnviarEmailPostVenta">
+                <MailOutlined /> Enviar email
+              </a-button>
+              <a-button size="large" @click="onSkipPrint">Omitir</a-button>
             </div>
           </template>
         </a-modal>
@@ -4057,5 +4189,50 @@ kbd {
   gap: 8px;
   justify-content: center;
   flex-wrap: wrap;
+}
+
+/* ─── Descuento global + observaciones en panel lateral ─────────────────── */
+.side-extras {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+}
+.side-extra-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.side-extra-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+/* ─── Descuento global en footer ────────────────────────────────────────────── */
+.footer-desc-global {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+}
+.footer-desc-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.side-extra-hint {
+  font-size: 11px;
+  color: var(--text-2);
+  text-align: right;
+  margin-top: -4px;
 }
 </style>

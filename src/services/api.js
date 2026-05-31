@@ -68,7 +68,7 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
-// --- Request: agrega Bearer token ---
+// --- Request: agrega Bearer token y maneja FormData correctamente ---
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('accessToken')
@@ -76,6 +76,15 @@ api.interceptors.request.use(
       config.headers = config.headers || {}
       config.headers.Authorization = `Bearer ${token}`
     }
+
+    // Si el body es FormData, eliminar el Content-Type hardcodeado
+    // para que Axios lo detecte automáticamente e incluya el boundary correcto.
+    // Sin esto, el header 'application/json' de los defaults sobreescribe
+    // el multipart/form-data y el servidor recibe JSON en vez del archivo.
+    if (config.data instanceof FormData) {
+      delete config.headers['Content-Type']
+    }
+
     return config
   },
   (error) => Promise.reject(error),
