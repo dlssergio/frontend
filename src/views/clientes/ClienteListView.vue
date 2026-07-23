@@ -393,6 +393,16 @@ onMounted(load)
                 </a-button>
               </a-tooltip>
 
+              <!-- ✅ Acceso directo a cuenta corriente -->
+              <a-tooltip title="Cuenta corriente">
+                <a-button
+                  size="small"
+                  @click="router.push({ name: 'cliente-cuenta-corriente', params: { id: record.id } })"
+                >
+                  <template #icon><DollarOutlined /></template>
+                </a-button>
+              </a-tooltip>
+
               <a-tooltip title="Editar">
                 <a-button size="small" @click="onEditar(record.id)">
                   <template #icon><EditOutlined /></template>

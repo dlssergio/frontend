@@ -11,6 +11,7 @@ const PresupuestoCreate    = () => import('../views/ventas/PresupuestoCreate.vue
 const RemitoVentaCreate    = () => import('../views/ventas/RemitoVentaCreate.vue')
 const FacturaVentaCreate   = () => import('../views/ventas/FacturaVentaCreate.vue')
 const ConsultaComprobantes = () => import('../views/ventas/ConsultaComprobantes.vue')
+const MonitorAFIP = () => import('../views/ventas/MonitorAFIP.vue')
 
 // ── Clientes ──────────────────────────────────────────────────
 const ClienteListView   = () => import('../views/clientes/ClienteListView.vue')
@@ -38,6 +39,7 @@ const ActualizacionPreciosView = () => import('../views/inventario/Actualizacion
 const ProveedorListView          = () => import('../views/compras/ProveedorListView.vue')
 const ProveedorDetailView        = () => import('../views/compras/ProveedorDetailView.vue')
 const ProveedorFormView          = () => import('../views/compras/ProveedorFormView.vue')
+const ProveedorCuentaCorriente   = () => import('../views/compras/ProveedorCuentaCorriente.vue') // <-- NUEVO
 const ComprobantesCompraListView = () => import('../views/compras/ComprobantesCompraListView.vue')
 const ComprobanteDetailView      = () => import('../views/compras/ComprobanteDetailView.vue')
 const FacturaCreate              = () => import('../views/compras/FacturaCreate.vue')
@@ -46,6 +48,7 @@ const OrdenCompraCreate          = () => import('../views/compras/OrdenCompraCre
 const OrdenPagoListView          = () => import('../views/compras/OrdenPagoListView.vue')
 const OrdenPagoFormView          = () => import('../views/compras/OrdenPagoFormView.vue')
 const ListasPreciosView          = () => import('../views/compras/ListasPreciosView.vue')
+const CuentaCorrienteProveedoresGlobal = () => import('../views/compras/CuentaCorrienteProveedoresGlobal.vue')
 
 // ── Finanzas ──────────────────────────────────────────────────
 const CajaListView   = () => import('../views/finanzas/CajaListView.vue')
@@ -130,6 +133,17 @@ const router = createRouter({
           name: 'venta-nota-credito-nueva',
           component: () => import('@/views/ventas/NotaCreditoCreate.vue'),
           meta: { title: 'Nueva Nota de Crédito / Débito', perms: ['ventas'] } },
+
+        { path: 'cuenta-corriente',
+          name: 'cuenta-corriente-global',
+          component: () => import('@/views/ventas/CuentaCorrienteGlobalView.vue'),
+          meta: { title: 'Cuenta Corriente', perms: ['ventas', 'finanzas'] },
+        },
+
+        { path: 'ventas/monitor-afip',
+          name: 'monitor-afip',
+          component: MonitorAFIP,
+          meta: { title: 'Monitor AFIP', perms: ['ventas'] } },
 
         // ── Clientes — rutas estáticas primero ───────────────
         { path: 'clientes',
@@ -280,6 +294,11 @@ const router = createRouter({
           component: ProveedorFormView,
           meta: { title: 'Editar Proveedor', perms: ['compras'] } },
 
+        { path: 'proveedores/:id/cuenta-corriente',
+          name: 'proveedor-cuenta-corriente',
+          component: ProveedorCuentaCorriente,
+          meta: { title: 'Cuenta Corriente Proveedor', perms: ['compras', 'finanzas'] } },
+
         { path: 'compras/comprobantes',
           name: 'compras-lista',
           component: ComprobantesCompraListView,
@@ -324,6 +343,11 @@ const router = createRouter({
           name: 'listas-precios',
           component: ListasPreciosView,
           meta: { title: 'Listas de Precios', perms: ['compras'] } },
+
+        { path: 'compras/cuenta-corriente',
+          name: 'proveedores-cuenta-corriente-global',
+          component: CuentaCorrienteProveedoresGlobal,
+          meta: { title: 'Cartera de Proveedores', perms: ['compras', 'finanzas'] } },
 
         // ── Finanzas ──────────────────────────────────────────
         { path: 'finanzas/cajas',

@@ -1,0 +1,187 @@
+.tech-ring{
+
+    position:absolute;
+
+    inset:0;
+
+    display:flex;
+
+    justify-content:center;
+
+    align-items:center;
+
+    z-index:15;
+
+}
+
+.ring-svg{
+
+    width:360px;
+
+    height:360px;
+
+    overflow:visible;
+
+}
+
+/*--------------------------------*/
+
+.orbit{
+
+    transform-origin:center;
+
+}
+
+.orbit-1{
+
+    animation:rotateSlow 90s linear infinite;
+
+}
+
+.orbit-2{
+
+    animation:rotateReverse 120s linear infinite;
+
+}
+
+/*--------------------------------*/
+
+.outer-ring{
+
+    fill:none;
+
+    stroke:rgba(96,165,250,.20);
+
+    stroke-width:1.6;
+
+    stroke-dasharray:8 10;
+
+}
+
+.inner-ring{
+
+    fill:none;
+
+    stroke:rgba(255,255,255,.08);
+
+    stroke-width:1.2;
+
+    stroke-dasharray:3 8;
+
+}
+
+/*--------------------------------*/
+
+.connections line{
+
+    stroke:rgba(96,165,250,.22);
+
+    stroke-width:1.1;
+
+}
+
+/*--------------------------------*/
+
+.node{
+
+    fill:#60A5FA;
+
+    filter:drop-shadow(0 0 10px rgba(96,165,250,.85));
+
+    animation:pulseNode 7s ease infinite;
+
+}
+
+.small-node{
+
+    fill:#BFDBFE;
+
+    opacity:.45;
+
+    animation:pulseSmall 6s ease infinite;
+
+}
+
+/*--------------------------------*/
+
+.live-dot{
+
+    fill:white;
+
+    filter:drop-shadow(0 0 8px #60A5FA);
+
+}
+
+/*--------------------------------*/
+
+@keyframes rotateSlow{
+
+    from{
+
+        transform:rotate(0deg);
+
+    }
+
+    to{
+
+        transform:rotate(360deg);
+
+    }
+
+}
+
+@keyframes rotateReverse{
+
+    from{
+
+        transform:rotate(360deg);
+
+    }
+
+    to{
+
+        transform:rotate(0deg);
+
+    }
+
+}
+
+@keyframes pulseNode{
+
+    0%,100%{
+
+        transform:scale(1);
+
+        opacity:.4;
+
+    }
+
+    50%{
+
+        transform:scale(1.6);
+
+        opacity:1;
+
+    }
+
+}
+
+@keyframes pulseSmall{
+
+    0%,100%{
+
+        transform:scale(1);
+
+        opacity:.35;
+
+    }
+
+    50%{
+
+        transform:scale(1.35);
+
+        opacity:.85;
+
+    }
+
+}

@@ -81,8 +81,50 @@ const ALL_COLUMNS = [
 const loading = ref(false)
 const loadingEmail = ref(null)
 const rows = ref([])
+const loadingAfip = ref(null)
 const total = ref(0)
 const tiposComprobante = ref([])
+
+const reintentarAFIP = async (record) => {
+  if (loadingAfip.value) return
+  loadingAfip.value = record.id
+  try {
+    const { data } = await api.post(`/api/comprobantes-venta/${record.id}/reintentar-cae/`)
+    message.success(data.mensaje || data.detail || 'Solicitud enviada a ARCA. Esperando respuesta...')
+
+    // Polling inteligente: Consultamos el backend cada 2.5 segundos hasta obtener el CAE
+    let intentos = 0
+    const interval = setInterval(async () => {
+      intentos++
+      await fetchData() // Refresca la grilla silenciosamente
+
+      const actualizado = rows.value.find(r => r.id === record.id)
+
+      if (actualizado && actualizado.cae) {
+        detailRecord.value = actualizado
+        message.success(`¡CAE obtenido exitosamente: ${actualizado.cae}!`)
+        loadingAfip.value = null // <-- Apagamos el loader al tener éxito
+        clearInterval(interval)
+      } else if (actualizado && actualizado.afip_error && actualizado.afip_error !== record.afip_error) {
+        detailRecord.value = actualizado
+        message.error(`ARCA rechazó la solicitud: ${actualizado.afip_error}`)
+        loadingAfip.value = null // <-- Apagamos el loader si hay error
+        clearInterval(interval)
+      } else if (intentos >= 5) {
+        // Timeout: Si pasaron más de 12 segundos
+        if (actualizado) detailRecord.value = actualizado
+        message.warning('ARCA está demorando más de lo normal. Refresque la pantalla en unos minutos.')
+        loadingAfip.value = null // <-- Apagamos el loader por timeout
+        clearInterval(interval)
+      }
+    }, 2500)
+
+  } catch (e) {
+    const msg = e?.response?.data?.detail || e?.response?.data?.error || 'Error de conexión con el servidor.'
+    message.error(msg)
+    loadingAfip.value = null // <-- Apagamos el loader si la petición inicial falla
+  }
+}
 
 const filters = reactive({
   search: '',
@@ -135,13 +177,12 @@ const ejecutarConversion = async () => {
     const { data } = await api.post(
       `/api/comprobantes-venta/${conversionRecord.value.id}/convertir/`,
       {
-        regla_id:     conversionRegla.value.id,
+        regla_id:      conversionRegla.value.id,
         observaciones: conversionObs.value || undefined,
       }
     )
     message.success(data.mensaje || 'Comprobante creado correctamente')
     modalConversionOpen.value = false
-    // Navegar al nuevo comprobante en ConsultaComprobantes filtrando por id
     await fetchData()
   } catch (e) {
     message.error(e?.response?.data?.error || 'Error al convertir')
@@ -388,6 +429,14 @@ const fetchData = async () => {
     const { data } = await api.get('/api/comprobantes-venta/', { params: buildParams() })
     rows.value = data?.results ?? data ?? []
     total.value = data?.count ?? (Array.isArray(data) ? data.length : 0)
+
+    // Si el panel detalle está abierto, actualizamos su información con los datos refrescados
+    if (detailOpen.value && detailRecord.value) {
+      const refreshedRecord = rows.value.find(r => r.id === detailRecord.value.id)
+      if (refreshedRecord) {
+        detailRecord.value = refreshedRecord
+      }
+    }
   } catch (e) {
     console.error(e)
     message.error('Error cargando comprobantes')
@@ -963,11 +1012,10 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
                     <MailOutlined />
                   </a-button>
                 </a-tooltip>
-                <!-- Conversión -->
                 <a-dropdown
                   v-if="record.estado !== 'AN'"
                   trigger="click"
-                  @visibleChange="(v) => v && cargarReglas(record)"
+                  @openChange="(v) => v && cargarReglas(record)"
                 >
                   <a-tooltip title="Convertir en...">
                     <a-button type="text" size="small" class="act-btn">
@@ -989,9 +1037,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
                         >
                           <SwapOutlined style="margin-right:6px" />
                           {{ regla.etiqueta }}
-                          <span v-if="!regla.tiene_serie_activa" style="color:#ef4444;font-size:11px;margin-left:4px">
-                            (sin serie)
-                          </span>
+                          <span v-if="!regla.tiene_serie_activa" style="color:#ef4444;font-size:11px;margin-left:4px">(sin serie)</span>
                         </a-menu-item>
                       </template>
                       <template v-else>
@@ -1102,6 +1148,7 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
 
           <div class="detail-sec">
             <div class="detail-sec-title">AFIP / CAE</div>
+
             <div v-if="detailRecord.cae" class="afip-ok">
               <CheckCircleOutlined class="afip-ok-ic" />
               <div>
@@ -1115,10 +1162,38 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
                 </div>
               </div>
             </div>
-            <div v-else-if="detailRecord.afip_error" class="afip-err">
-              <WarningOutlined class="afip-err-ic" />
-              <p class="afip-err-msg">{{ detailRecord.afip_error }}</p>
+
+            <div v-else-if="detailRecord.afip_error" class="afip-err" style="flex-direction: column; align-items: stretch; gap: 12px;">
+              <div style="display: flex; gap: 10px;">
+                <WarningOutlined class="afip-err-ic" />
+                <p class="afip-err-msg">{{ detailRecord.afip_error }}</p>
+              </div>
+              <a-button
+                size="small"
+                danger
+                type="primary"
+                ghost
+                :loading="loadingAfip === detailRecord.id"
+                @click="reintentarAFIP(detailRecord)"
+              >
+                <ReloadOutlined /> Reintentar AFIP
+              </a-button>
             </div>
+
+            <div v-else-if="detailRecord.estado === 'CN' && !detailRecord.cae" style="display: flex; flex-direction: column; gap: 8px;">
+              <div class="afip-none">
+                <LoadingOutlined v-if="loadingAfip === detailRecord.id" style="margin-right: 6px;" />
+                {{ loadingAfip === detailRecord.id ? 'Esperando respuesta de AFIP...' : 'Pendiente de autorización AFIP' }}
+              </div>
+              <a-button
+                size="small"
+                :loading="loadingAfip === detailRecord.id"
+                @click="reintentarAFIP(detailRecord)"
+              >
+                <ThunderboltOutlined /> Solicitar CAE manualmente
+              </a-button>
+            </div>
+
             <div v-else class="afip-none">Sin datos AFIP</div>
           </div>
 
@@ -1127,7 +1202,6 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
             <p class="detail-obs">{{ detailRecord.observaciones }}</p>
           </div>
 
-          <!-- Conversiones disponibles -->
           <div
             v-if="detailRecord.estado !== 'AN' && (reglasPorComprobante[detailRecord.id] || []).length"
             class="detail-sec"
@@ -1174,53 +1248,53 @@ onUnmounted(() => window.removeEventListener('keydown', handleKey))
       <ThunderboltOutlined />
       <kbd>F5</kbd> actualizar · <kbd>Ctrl+E</kbd> exportar CSV · <kbd>Esc</kbd> cerrar detalle
     </div>
-  </div>
-  <!-- Modal conversión -->
-  <a-modal
-    v-model:open="modalConversionOpen"
-    :title="conversionRegla?.etiqueta || 'Convertir comprobante'"
-    ok-text="Confirmar conversión"
-    cancel-text="Cancelar"
-    :confirm-loading="!!convirtiendo"
-    @ok="ejecutarConversion"
-  >
-    <div v-if="conversionRecord && conversionRegla" style="display:flex;flex-direction:column;gap:14px;padding:4px 0">
-      <a-descriptions :column="1" size="small" bordered>
-        <a-descriptions-item label="Comprobante origen">
-          {{ conversionRecord.numero_completo }}
-        </a-descriptions-item>
-        <a-descriptions-item label="Cliente">
-          {{ conversionRecord.cliente?.entidad?.razon_social || conversionRecord.cliente_nombre_override || '—' }}
-        </a-descriptions-item>
-        <a-descriptions-item label="Total origen">
-          $ {{ moneyAR(conversionRecord.total) }}
-        </a-descriptions-item>
-        <a-descriptions-item label="Se creará">
-          <strong>{{ conversionRegla.tipo_destino_nombre }}</strong> en estado Borrador
-        </a-descriptions-item>
-        <a-descriptions-item label="Copia ítems">
-          {{ conversionRegla.copia_items ? 'Sí' : 'No' }}
-        </a-descriptions-item>
-      </a-descriptions>
-      <div>
-        <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:4px">
-          Observaciones (opcional)
+
+    <a-modal
+      v-model:open="modalConversionOpen"
+      :title="conversionRegla?.etiqueta || 'Convertir comprobante'"
+      ok-text="Confirmar conversión"
+      cancel-text="Cancelar"
+      :confirm-loading="!!convirtiendo"
+      @ok="ejecutarConversion"
+    >
+      <div v-if="conversionRecord && conversionRegla" style="display:flex;flex-direction:column;gap:14px;padding:4px 0">
+        <a-descriptions :column="1" size="small" bordered>
+          <a-descriptions-item label="Comprobante origen">
+            {{ conversionRecord.numero_completo }}
+          </a-descriptions-item>
+          <a-descriptions-item label="Cliente">
+            {{ conversionRecord.cliente?.entidad?.razon_social || conversionRecord.cliente_nombre_override || '—' }}
+          </a-descriptions-item>
+          <a-descriptions-item label="Total origen">
+            $ {{ moneyAR(conversionRecord.total) }}
+          </a-descriptions-item>
+          <a-descriptions-item label="Se creará">
+            <strong>{{ conversionRegla.tipo_destino_nombre }}</strong> en estado Borrador
+          </a-descriptions-item>
+          <a-descriptions-item label="Copia ítems">
+            {{ conversionRegla.copia_items ? 'Sí' : 'No' }}
+          </a-descriptions-item>
+        </a-descriptions>
+        <div>
+          <div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:4px">
+            Observaciones (opcional)
+          </div>
+          <a-textarea
+            v-model:value="conversionObs"
+            placeholder="Podés agregar una nota al comprobante destino..."
+            :rows="3"
+          />
         </div>
-        <a-textarea
-          v-model:value="conversionObs"
-          placeholder="Podés agregar una nota al comprobante destino..."
-          :rows="3"
+        <a-alert
+          type="info"
+          show-icon
+          :message="conversionRegla?.confirmar_automaticamente
+            ? 'El nuevo comprobante se creará y confirmará automáticamente.'
+            : 'El nuevo comprobante se creará como Borrador. Podrás revisarlo y confirmarlo desde Consulta de Comprobantes.'"
         />
       </div>
-      <a-alert
-        type="info"
-        show-icon
-        :message="conversionRegla?.confirmar_automaticamente
-          ? 'El nuevo comprobante se creará y confirmará automáticamente.'
-          : 'El nuevo comprobante se creará como Borrador. Podrás revisarlo y confirmarlo desde Consulta de Comprobantes.'"
-      />
-    </div>
-  </a-modal>
+    </a-modal>
+  </div>
 </template>
 
 <style scoped>

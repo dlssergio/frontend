@@ -1,0 +1,40 @@
+:root{
+
+    /* BRAND */
+
+    --guri-primary:#2563EB;
+    --guri-primary-hover:#1D4ED8;
+    --guri-primary-light:#60A5FA;
+
+    /* BACKGROUND */
+
+    --guri-bg:#071425;
+    --guri-bg-2:#0B1F3E;
+    --guri-bg-3:#163C82;
+
+    /* SURFACE */
+
+    --surface:#FFFFFF;
+    --surface-2:#F8FAFC;
+
+    /* TEXT */
+
+    --text:#0F172A;
+    --text-light:#64748B;
+    --text-white:#F8FAFC;
+
+    /* BORDER */
+
+    --border:#E2E8F0;
+
+    /* SHADOW */
+
+    --shadow:
+
+        0 30px 60px rgba(2,6,23,.18);
+
+    --shadow-soft:
+
+        0 12px 28px rgba(15,23,42,.08);
+
+}

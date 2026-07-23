@@ -1,68 +1,210 @@
 <template>
-  <button class="btn" :disabled="loading || disabled" type="button" @click="$emit('click')">
-    <span v-if="!loading"><slot /></span>
+  <button
+    class="login-button"
+    :disabled="loading || disabled"
+    @click="$emit('click')"
+    type="button"
+  >
+    <span
+      v-if="!loading"
+      class="content"
+    >
+      <slot />
+    </span>
 
-    <span v-else class="loader" aria-hidden="true"></span>
+    <span
+      v-else
+      class="spinner"
+    ></span>
+
+    <span class="shine"></span>
+
   </button>
 </template>
 
 <script setup>
+
 defineProps({
-  loading: { type: Boolean, default: false },
-  disabled: { type: Boolean, default: false },
+
+    loading:Boolean,
+
+    disabled:Boolean
+
 })
-defineEmits(['click'])
+
+defineEmits([
+
+    'click'
+
+])
+
 </script>
 
 <style scoped>
-.btn {
-  width: 100%;
-  height: 48px;
-  border-radius: 10px;
-  border: 0;
-  cursor: pointer;
-  font-weight: 700;
-  font-size: 16px;
-  color: #fff;
-  background: linear-gradient(180deg, #2f66e8, #2556cf);
-  box-shadow: 0 10px 22px rgba(37, 86, 207, 0.35);
-  transition:
-    transform 0.12s ease,
-    box-shadow 0.12s ease,
-    filter 0.12s ease;
+
+.login-button{
+
+    position:relative;
+
+    overflow:hidden;
+
+    width:100%;
+
+    height:56px;
+
+    border:none;
+
+    border-radius:14px;
+
+    cursor:pointer;
+
+    color:white;
+
+    font-size:15px;
+
+    font-weight:700;
+
+    letter-spacing:.4px;
+
+    background:
+
+        linear-gradient(
+            135deg,
+            #2563EB,
+            #1D4ED8
+        );
+
+    box-shadow:
+
+        0 12px 30px rgba(37,99,235,.28);
+
+    transition:
+        .25s;
+
 }
 
-.btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 14px 26px rgba(37, 86, 207, 0.42);
-  filter: brightness(1.02);
+.login-button:hover{
+
+    transform:translateY(-2px);
+
+    box-shadow:
+
+        0 18px 36px rgba(37,99,235,.34);
+
 }
 
-.btn:active {
-  transform: translateY(0px);
-  box-shadow: 0 10px 22px rgba(37, 86, 207, 0.35);
+.login-button:active{
+
+    transform:translateY(1px);
+
 }
 
-.btn:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-  transform: none;
-  box-shadow: none;
+.login-button:disabled{
+
+    opacity:.70;
+
+    cursor:not-allowed;
+
 }
 
-.loader {
-  width: 18px;
-  height: 18px;
-  border-radius: 999px;
-  border: 2px solid rgba(255, 255, 255, 0.45);
-  border-top-color: rgba(255, 255, 255, 1);
-  display: inline-block;
-  animation: spin 0.8s linear infinite;
+.content{
+
+    position:relative;
+
+    z-index:2;
+
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+/*--------------------------*/
+
+.spinner{
+
+    width:20px;
+
+    height:20px;
+
+    border-radius:50%;
+
+    border:
+
+        2px solid rgba(255,255,255,.30);
+
+    border-top-color:white;
+
+    display:inline-block;
+
+    animation:spin .8s linear infinite;
+
+    position:relative;
+
+    z-index:2;
+
 }
+
+/*--------------------------*/
+
+.shine{
+
+    position:absolute;
+
+    top:0;
+
+    left:-120%;
+
+    width:60%;
+
+    height:100%;
+
+    background:
+
+        linear-gradient(
+
+            90deg,
+
+            transparent,
+
+            rgba(255,255,255,.28),
+
+            transparent
+
+        );
+
+    transform:skewX(-20deg);
+
+}
+
+.login-button:hover .shine{
+
+    animation:shine .9s;
+
+}
+
+/*--------------------------*/
+
+@keyframes spin{
+
+    to{
+
+        transform:rotate(360deg);
+
+    }
+
+}
+
+@keyframes shine{
+
+    from{
+
+        left:-120%;
+
+    }
+
+    to{
+
+        left:160%;
+
+    }
+
+}
+
 </style>

@@ -14,6 +14,9 @@ import {
   MenuFoldOutlined,
   BankOutlined,
   SkinOutlined,
+  DollarOutlined,
+  ThunderboltOutlined,
+  CloudUploadOutlined,
 } from '@ant-design/icons-vue'
 
 const router = useRouter()
@@ -22,14 +25,131 @@ const configStore = useConfigStore()
 const authStore = useAuthStore()
 
 const collapsed = ref(false)
-const selectedKeys = ref([route.name])
+const selectedKeys = ref([])
 const openKeys = ref([])
 
+// Mapa route.name → submenu raíz que debe estar abierto
+const routeToSubmenu = {
+  // Ventas
+  'venta-pos':               'sub-ventas',
+  'venta-presupuesto-nuevo': 'sub-ventas',
+  'venta-factura-admin-nueva':'sub-ventas',
+  'venta-remito-nuevo':      'sub-ventas',
+  'venta-nota-pedido-nueva': 'sub-ventas',
+  'venta-nota-credito-nueva':'sub-ventas',
+  'consulta-comprobantes':   'sub-ventas',
+  'ventas-dashboard':        'sub-ventas',
+  'reglas-conversion':       'sub-ventas',
+  'clientes-lista':          'sub-ventas',
+  'cliente-crear':           'sub-ventas',
+  'cliente-detalle':         'sub-ventas',
+  'cliente-editar':          'sub-ventas',
+  'cliente-cuenta-corriente':'sub-ventas',
+  'clientes-informes':       'sub-ventas',
+  'cuenta-corriente-global': 'sub-ventas',
+  'monitor-afip':            'sub-ventas',
+
+  // Inventario
+  'inventario-dashboard':    'sub-inventario',
+  'articulo-lista':          'sub-inventario',
+  'articulo-crear':          'sub-inventario',
+  'articulo-detalle':        'sub-inventario',
+  'articulo-editar':         'sub-inventario',
+  'ajustes-lista':           'sub-inventario',
+  'ajuste-crear':            'sub-inventario',
+  'ajuste-detalle':          'sub-inventario',
+  'transferencias-lista':    'sub-inventario',
+  'transferencia-crear':     'sub-inventario',
+  'transferencia-detalle':   'sub-inventario',
+  'ledger-lista':            'sub-inventario',
+  'alertas-reposicion':      'sub-inventario',
+  'inventario-valorizacion': 'sub-inventario',
+  'kardex':                  'sub-inventario',
+  'depositos-lista':         'sub-inventario',
+  'actualizacion-precios':   'sub-inventario',
+  'marcas-rubros':           'sub-inventario',
+
+  // Compras
+  'proveedores-lista':                   'sub-compras',
+  'proveedor-crear':                     'sub-compras',
+  'proveedor-detalle':                   'sub-compras',
+  'proveedor-editar':                    'sub-compras',
+  'proveedor-cuenta-corriente':          'sub-compras', // <-- NUEVO
+  'proveedores-cuenta-corriente-global': 'sub-compras', // <-- NUEVO
+  'compras-lista':                       'sub-compras',
+  'compra-detalle':                      'sub-compras',
+  'compra-factura-nueva':                'sub-compras',
+  'compra-remito-nuevo':                 'sub-compras',
+  'compra-orden-nueva':                  'sub-compras',
+  'listas-precios':                      'sub-compras',
+  'ordenes-pago-lista':                  'sub-compras',
+  'orden-pago-nueva':                    'sub-compras',
+  'orden-pago-detalle':                  'sub-compras',
+
+  // Finanzas
+  'caja-lista':              'sub-finanzas',
+  'cheques-lista':           'sub-finanzas',
+
+  // Sin submenú (cierran todos los raíces)
+  'home':                    null,
+  'configuracion':           null,
+  'usuarios':                null,
+  'importacion-masiva':      null,
+}
+
+// Submenús raíz — participan en el accordion
+const rootSubmenus = ['sub-ventas', 'sub-inventario', 'sub-compras', 'sub-finanzas']
+
+// Mapa: route.name → submenú anidado que debe estar abierto (si aplica)
+const routeToNested = {
+  'ajustes-lista':         'sub-inv-movimientos',
+  'ajuste-crear':          'sub-inv-movimientos',
+  'ajuste-detalle':        'sub-inv-movimientos',
+  'transferencias-lista':  'sub-inv-movimientos',
+  'transferencia-crear':   'sub-inv-movimientos',
+  'transferencia-detalle': 'sub-inv-movimientos',
+  'ledger-lista':          'sub-inv-movimientos',
+  'alertas-reposicion':    'sub-inv-reportes',
+  'inventario-valorizacion':'sub-inv-reportes',
+  'kardex':                'sub-inv-reportes',
+  'marcas-rubros':         'sub-inv-config',
+  'depositos-lista':       'sub-inv-config',
+  'actualizacion-precios': 'sub-inv-config',
+  'compra-factura-nueva':  'sub-compras-nuevo',
+  'compra-remito-nuevo':   'sub-compras-nuevo',
+  'compra-orden-nueva':    'sub-compras-nuevo',
+}
+
+const onOpenChange = (keys) => {
+  const newRootKey = keys.find(k => rootSubmenus.includes(k) && !openKeys.value.includes(k))
+  if (newRootKey) {
+    // Se abrió un nuevo raíz → cerrar otros raíces, mantener anidados del nuevo
+    const nested = keys.filter(k => !rootSubmenus.includes(k))
+    openKeys.value = [newRootKey, ...nested]
+  } else {
+    // Se cerró/abrió un submenú anidado → respetar sin tocar los raíces
+    const currentRoots = keys.filter(k => rootSubmenus.includes(k))
+    const nested = keys.filter(k => !rootSubmenus.includes(k))
+    openKeys.value = [...currentRoots, ...nested]
+  }
+}
+
+// Al navegar: actualizar selectedKeys y abrir/cerrar el submenu correcto
 watch(
   () => route.name,
   (newVal) => {
     selectedKeys.value = [newVal]
+    if (collapsed.value) return
+    const target = routeToSubmenu[newVal]
+    if (target) {
+      const nested = routeToNested[newVal]
+      openKeys.value = nested ? [target, nested] : [target]
+    } else {
+        // Ruta sin submenú (home, configuración, usuarios): cerrar todo
+      openKeys.value = []
+    }
   },
+  { immediate: true }
 )
 
 /**
@@ -88,13 +208,11 @@ const sidebarColors = [
   { key: 'red', name: 'Rojo', swatch: '#ef4444' },
 ]
 
-/** Fallback: inicial para cuando no hay logo */
 const brandInitial = computed(() => {
   const n = (configStore.nombreFantasia || '').trim()
   return n ? n[0].toUpperCase() : 'E'
 })
 
-/** Tokens Ant Design leyendo CSS vars */
 const themeConfig = computed(() => {
   const mode = configStore.currentTheme || 'light'
   const isDark = mode === 'dark'
@@ -110,21 +228,16 @@ const themeConfig = computed(() => {
       '--font-sans',
       "Manrope, Inter, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif",
     ),
-
     colorPrimary: siderAccent,
     colorBgBase: cssVar('--app-bg', isDark ? '#0b1020' : '#f1f5f9'),
     colorBgContainer: cssVar('--surface-1', isDark ? '#111827' : '#ffffff'),
     colorTextBase: cssVar('--text-0', isDark ? '#e5e7eb' : '#0f172a'),
     colorBorder: cssVar('--border', isDark ? 'rgba(148,163,184,0.12)' : 'rgba(15,23,42,0.10)'),
-
-    /* ✅ Anti “ámbar” (outline warning) */
     controlOutlineWidth: 0,
     controlOutline: 'transparent',
-
     boxShadowSecondary: 'none',
     boxShadowTertiary: 'none',
   }
-
   return { algorithm, token }
 })
 </script>
@@ -136,7 +249,6 @@ const themeConfig = computed(() => {
       class="app-wrapper"
       :class="[`theme-${configStore.currentTheme || 'light'}`, { 'pos-mode': isPosMode }]"
     >
-      <!-- FIXED SIDER -->
       <a-layout-sider
         v-model:collapsed="collapsed"
         collapsible
@@ -145,7 +257,6 @@ const themeConfig = computed(() => {
         class="custom-sider"
         :trigger="null"
       >
-        <!-- ✅ BRAND / LOGO AREA -->
         <a-tooltip
           placement="right"
           :title="configStore.nombreFantasia"
@@ -153,7 +264,6 @@ const themeConfig = computed(() => {
           :mouseLeaveDelay="0"
         >
           <div class="logo-area" :class="{ collapsed }">
-            <!-- Collapsed: badge -->
             <div v-if="collapsed" class="brand-badge" aria-hidden="true">
               <img
                 v-if="configStore.logoUrl"
@@ -164,7 +274,6 @@ const themeConfig = computed(() => {
               <div v-else class="brand-badge-fallback">{{ brandInitial }}</div>
             </div>
 
-            <!-- Expanded: logo + name -->
             <div v-else class="brand-row">
               <div class="brand-avatar">
                 <img
@@ -188,7 +297,8 @@ const themeConfig = computed(() => {
 
         <a-menu
           v-model:selectedKeys="selectedKeys"
-          v-model:openKeys="openKeys"
+          :openKeys="openKeys"
+          @openChange="onOpenChange"
           theme="dark"
           mode="inline"
           class="custom-menu"
@@ -219,9 +329,23 @@ const themeConfig = computed(() => {
             >
               Comprobantes
             </a-menu-item>
-            <a-menu-item key="clientes-lista">
-              <router-link :to="{ name: 'clientes-lista' }">Clientes</router-link>
+            <a-menu-item key="clientes-lista"
+              @click="router.push({ name: 'clientes-lista' })">
+              Clientes
             </a-menu-item>
+            <a-menu-item key="cuenta-corriente-global"
+              @click="router.push({ name: 'cuenta-corriente-global' })">
+              <DollarOutlined /> Cuentas Corrientes
+            </a-menu-item>
+            <a-menu-item key="clientes-informes"
+              @click="router.push({ name: 'clientes-informes' })">
+              Informes de clientes
+            </a-menu-item>
+
+            <a-menu-item key="monitor-afip" @click="router.push({ name: 'monitor-afip' })">
+              <ThunderboltOutlined style="color: #f59e0b;" /> Monitor AFIP
+            </a-menu-item>
+
           </a-sub-menu>
 
           <a-sub-menu v-if="canSeeInventario" key="sub-inventario">
@@ -278,7 +402,7 @@ const themeConfig = computed(() => {
 
             <a-sub-menu key="sub-inv-config">
               <template #title>Configuración</template>
-              <a-menu-item key="depositos-lista"
+              <a-menu-item key="marcas-rubros"
                 @click="router.push({ name: 'marcas-rubros' })">
                 Marcas y Rubros
               </a-menu-item>
@@ -317,6 +441,11 @@ const themeConfig = computed(() => {
             <a-menu-item key="ordenes-pago-lista"
               @click="router.push({ name: 'ordenes-pago-lista' })">
               Órdenes de Pago
+            </a-menu-item>
+
+            <a-menu-item key="proveedores-cuenta-corriente-global"
+              @click="router.push({ name: 'proveedores-cuenta-corriente-global' })">
+              <DollarOutlined /> Cuentas Corrientes
             </a-menu-item>
 
             <a-sub-menu key="sub-compras-nuevo">
@@ -360,16 +489,18 @@ const themeConfig = computed(() => {
             <UserOutlined />
             <span>Usuarios y Roles</span>
           </a-menu-item>
+          <a-menu-item v-if="canSeeAdmin" key="importacion-masiva" @click="router.push({ name: 'importacion-masiva' })">
+            <CloudUploadOutlined />
+            <span>Importación Masiva</span>
+          </a-menu-item>
         </a-menu>
       </a-layout-sider>
 
-      <!-- CONTENT LAYOUT (offset por sider fixed) -->
       <a-layout
         class="content-shell"
         :class="{ 'pos-mode': isPosMode }"
         :style="{ marginLeft: contentOffset }"
       >
-        <!-- HEADER flotante -->
         <a-layout-header class="main-header">
           <div class="header-left">
             <div class="trigger" @click="collapsed = !collapsed">
@@ -417,13 +548,11 @@ const themeConfig = computed(() => {
           </router-view>
         </a-layout-content>
 
-        <!-- ✅ En modo POS ocultamos el footer -->
         <a-layout-footer v-if="!isPosMode" class="main-footer">
           {{ configStore.nombreFantasia }} ©2025
         </a-layout-footer>
       </a-layout>
 
-      <!-- Drawer -->
       <a-drawer
         v-model:open="settingsOpen"
         title="Opciones"

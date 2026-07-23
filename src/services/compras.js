@@ -12,9 +12,20 @@ export const proveedoresService = {
   comprobantes(id, params = {}) {
     return api.get(`/api/proveedores/${id}/comprobantes/`, { params })
   },
-  cuentaCorriente(id) {
-    return api.get(`/api/proveedores/${id}/cuenta_corriente/`)
+
+  // ENDPOINTS DE CUENTA CORRIENTE
+  cuentaCorriente(id, params = {}) {
+    return api.get(`/api/proveedores-admin/${id}/cuenta-corriente/`, { params })
   },
+  comprobantesImpagos(id) {
+    return api.get(`/api/proveedores-admin/${id}/comprobantes-impagos/`)
+  },
+  ordenesPago(id) {
+    return api.get(`/api/proveedores-admin/${id}/ordenes-pago/`)
+  },
+  resumenCartera(params = {}) {
+    return api.get('/api/proveedores-admin/resumen-cartera/', { params })
+  }
 }
 
 // ─── Comprobantes de Compra ────────────────────────────────────

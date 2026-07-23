@@ -5,6 +5,7 @@ import {
   SaveOutlined, ReloadOutlined, PlusOutlined,
   EditOutlined, DeleteOutlined, SettingOutlined,
   FileTextOutlined, ShopOutlined, CheckCircleOutlined,
+  PercentageOutlined, IdcardOutlined
 } from '@ant-design/icons-vue'
 import api from '@/services/api'
 
@@ -218,11 +219,139 @@ async function eliminarSerie(id) {
   })
 }
 
+// ─── Tab 4: Impuestos (Tasas de IVA) ──────────────────────────
+const impuestos          = ref([])
+const loadingImpuestos   = ref(false)
+const modalImpuesto      = ref(false)
+const submittingImpuesto = ref(false)
+
+const formImpuesto = reactive({
+  id: null, nombre: '', tasa: 0, activo: true,
+})
+
+const colsImpuestos = [
+  { key: 'nombre',     title: 'Nombre del Impuesto', dataIndex: 'nombre' },
+  { key: 'tasa',       title: 'Tasa / Porcentaje',   dataIndex: 'tasa', align: 'right', width: 150 },
+  { key: 'activo_i',   title: 'Estado',              width: 120, align: 'center' },
+  { key: 'acciones_i', title: 'Acciones',            width: 100, align: 'center', fixed: 'right' },
+]
+
+async function loadImpuestos() {
+  loadingImpuestos.value = true
+  try {
+    const res = await api.get('/api/impuestos/')
+    impuestos.value = res.data.results ?? res.data
+  } catch { message.error('Error al cargar impuestos.') }
+  finally { loadingImpuestos.value = false }
+}
+
+function abrirNuevoImpuesto() {
+  Object.assign(formImpuesto, { id: null, nombre: '', tasa: 0, activo: true })
+  modalImpuesto.value = true
+}
+
+function editarImpuesto(r) {
+  Object.assign(formImpuesto, { ...r }); modalImpuesto.value = true
+}
+
+async function guardarImpuesto() {
+  if (!formImpuesto.nombre.trim()) { message.error('El nombre es obligatorio.'); return }
+  submittingImpuesto.value = true
+  try {
+    if (formImpuesto.id) {
+      await api.patch(`/api/impuestos/${formImpuesto.id}/`, formImpuesto)
+      message.success('Impuesto actualizado.')
+    } else {
+      await api.post('/api/impuestos/', formImpuesto)
+      message.success('Impuesto creado.')
+    }
+    modalImpuesto.value = false; loadImpuestos()
+  } catch (e) {
+    message.error(e.response?.data?.nombre?.[0] ?? 'No se pudo guardar.')
+  } finally { submittingImpuesto.value = false }
+}
+
+async function eliminarImpuesto(id) {
+  Modal.confirm({
+    title: '¿Eliminar este impuesto?',
+    content: 'Si está en uso por artículos o comprobantes no podrá eliminarse.',
+    okText: 'Eliminar', okType: 'danger', cancelText: 'Cancelar',
+    async onOk() {
+      try { await api.delete(`/api/impuestos/${id}/`); message.success('Eliminado.'); loadImpuestos() }
+      catch { message.error('No se pudo eliminar. Puede estar en uso.') }
+    },
+  })
+}
+
+// ─── Tab 5: Categorías Impositivas ────────────────────────────
+const categorias          = ref([])
+const loadingCategorias   = ref(false)
+const modalCategoria      = ref(false)
+const submittingCategoria = ref(false)
+
+const formCategoria = reactive({
+  id: null, nombre: '', requiere_cuit: false, discrimina_iva: false, es_consumidor_final: false
+})
+
+const colsCategorias = [
+  { key: 'nombre',     title: 'Nombre (Condición AFIP)', dataIndex: 'nombre' },
+  { key: 'flags_c',    title: 'Comportamiento del Sistema', width: 400 },
+  { key: 'acciones_c', title: 'Acciones', width: 100, align: 'center', fixed: 'right' },
+]
+
+async function loadCategorias() {
+  loadingCategorias.value = true
+  try {
+    const res = await api.get('/api/categorias-impositivas/')
+    categorias.value = res.data.results ?? res.data
+  } catch { message.error('Error al cargar categorías.') }
+  finally { loadingCategorias.value = false }
+}
+
+function abrirNuevaCategoria() {
+  Object.assign(formCategoria, { id: null, nombre: '', requiere_cuit: false, discrimina_iva: false, es_consumidor_final: false })
+  modalCategoria.value = true
+}
+
+function editarCategoria(r) {
+  Object.assign(formCategoria, { ...r }); modalCategoria.value = true
+}
+
+async function guardarCategoria() {
+  if (!formCategoria.nombre.trim()) { message.error('El nombre es obligatorio.'); return }
+  submittingCategoria.value = true
+  try {
+    if (formCategoria.id) {
+      await api.patch(`/api/categorias-impositivas/${formCategoria.id}/`, formCategoria)
+      message.success('Categoría actualizada.')
+    } else {
+      await api.post('/api/categorias-impositivas/', formCategoria)
+      message.success('Categoría creada.')
+    }
+    modalCategoria.value = false; loadCategorias()
+  } catch (e) {
+    message.error(e.response?.data?.nombre?.[0] ?? 'No se pudo guardar.')
+  } finally { submittingCategoria.value = false }
+}
+
+async function eliminarCategoria(id) {
+  Modal.confirm({
+    title: '¿Eliminar esta categoría?',
+    okText: 'Eliminar', okType: 'danger', cancelText: 'Cancelar',
+    async onOk() {
+      try { await api.delete(`/api/categorias-impositivas/${id}/`); message.success('Eliminada.'); loadCategorias() }
+      catch { message.error('No se pudo eliminar. Puede estar asociada a clientes.') }
+    },
+  })
+}
+
 // ─── onMounted ────────────────────────────────────────────────
 onMounted(async () => {
   loadEmpresa()
   loadTipos()
   loadSeries()
+  loadImpuestos()
+  loadCategorias()
   const [mR, dR] = await Promise.allSettled([
     api.get('/api/monedas/'),
     api.get('/api/inventario/depositos/'),
@@ -235,18 +364,14 @@ onMounted(async () => {
 <template>
   <div class="config-page">
 
-    <!-- Hero -->
     <section class="hero">
       <div class="hero__left">
         <div class="hero__eyebrow">Sistema · Administración</div>
         <h1 class="hero__title">Configuración</h1>
-        <p class="hero__subtitle">Datos de la empresa, tipos de comprobante y series de numeración.</p>
+        <p class="hero__subtitle">Datos de la empresa, tipos de comprobante, series e impuestos.</p>
       </div>
     </section>
 
-    <!-- Modales -->
-
-    <!-- Modal Tipo Comprobante -->
     <a-modal v-model:open="modalTipo"
       :title="formTipo.id ? 'Editar Tipo de Comprobante' : 'Nuevo Tipo de Comprobante'"
       :footer="null" width="620px">
@@ -299,7 +424,6 @@ onMounted(async () => {
       </div>
     </a-modal>
 
-    <!-- Modal Serie -->
     <a-modal v-model:open="modalSerie"
       :title="formSerie.id ? 'Editar Serie de Documentos' : 'Nueva Serie de Documentos'"
       :footer="null" width="540px">
@@ -345,11 +469,62 @@ onMounted(async () => {
       </div>
     </a-modal>
 
-    <!-- Tabs -->
+    <a-modal v-model:open="modalImpuesto"
+      :title="formImpuesto.id ? 'Editar Impuesto' : 'Nuevo Impuesto'"
+      :footer="null" width="400px">
+      <div class="modal-form">
+        <div class="mf field-full" style="margin-bottom: 12px;">
+          <label class="req">Nombre del Impuesto</label>
+          <a-input v-model:value="formImpuesto.nombre" allow-clear placeholder="Ej: IVA 21%" />
+        </div>
+        <div class="mf field-full" style="margin-bottom: 16px;">
+          <label class="req">Tasa (%)</label>
+          <a-input-number v-model:value="formImpuesto.tasa" :min="0" :max="100" :step="0.01" style="width:100%" />
+        </div>
+        <div class="mf field-full">
+          <a-checkbox v-model:checked="formImpuesto.activo">Impuesto Activo</a-checkbox>
+        </div>
+        <div class="modal-footer">
+          <a-button @click="modalImpuesto = false">Cancelar</a-button>
+          <a-button type="primary" :loading="submittingImpuesto" @click="guardarImpuesto">
+            {{ formImpuesto.id ? 'Guardar' : 'Crear' }}
+          </a-button>
+        </div>
+      </div>
+    </a-modal>
+
+    <a-modal v-model:open="modalCategoria"
+      :title="formCategoria.id ? 'Editar Categoría Impositiva' : 'Nueva Categoría Impositiva'"
+      :footer="null" width="500px">
+      <div class="modal-form">
+        <div class="mf field-full" style="margin-bottom: 16px;">
+          <label class="req">Nombre de la Categoría (Condición AFIP)</label>
+          <a-input v-model:value="formCategoria.nombre" allow-clear placeholder="Ej: Responsable Inscripto" />
+        </div>
+        <a-divider style="margin:8px 0">Reglas de Negocio</a-divider>
+        <div class="mf field-full" style="display: flex; flex-direction: column; gap: 12px; margin-top: 8px;">
+          <a-checkbox v-model:checked="formCategoria.requiere_cuit">
+            <strong>Requiere CUIT</strong> (Exige ingresar CUIT válido al crear cliente)
+          </a-checkbox>
+          <a-checkbox v-model:checked="formCategoria.discrimina_iva">
+            <strong>Discrimina IVA</strong> (Se le emiten facturas tipo 'A')
+          </a-checkbox>
+          <a-checkbox v-model:checked="formCategoria.es_consumidor_final">
+            <strong>Es Consumidor Final</strong> (Para topes de montos anónimos)
+          </a-checkbox>
+        </div>
+        <div class="modal-footer">
+          <a-button @click="modalCategoria = false">Cancelar</a-button>
+          <a-button type="primary" :loading="submittingCategoria" @click="guardarCategoria">
+            {{ formCategoria.id ? 'Guardar' : 'Crear' }}
+          </a-button>
+        </div>
+      </div>
+    </a-modal>
+
     <a-card class="tabs-card" :bordered="false">
       <a-tabs v-model:activeKey="activeTab">
 
-        <!-- ── Empresa ── -->
         <a-tab-pane key="empresa">
           <template #tab><ShopOutlined /> Empresa</template>
 
@@ -406,7 +581,6 @@ onMounted(async () => {
           </div>
         </a-tab-pane>
 
-        <!-- ── Tipos de Comprobante ── -->
         <a-tab-pane key="tipos">
           <template #tab><FileTextOutlined /> Tipos de Comprobante</template>
           <div class="tab-toolbar">
@@ -448,7 +622,6 @@ onMounted(async () => {
           </a-table>
         </a-tab-pane>
 
-        <!-- ── Series de Documentos ── -->
         <a-tab-pane key="series">
           <template #tab><SettingOutlined /> Series de Documentos</template>
           <a-alert type="info" show-icon
@@ -483,6 +656,77 @@ onMounted(async () => {
                   </a-tooltip>
                   <a-tooltip title="Eliminar">
                     <a-button size="small" danger @click="eliminarSerie(record.id)"><template #icon><DeleteOutlined /></template></a-button>
+                  </a-tooltip>
+                </a-space>
+              </template>
+            </template>
+          </a-table>
+        </a-tab-pane>
+
+        <a-tab-pane key="impuestos">
+          <template #tab><PercentageOutlined /> Impuestos (IVA)</template>
+          <div class="tab-toolbar">
+            <a-button :loading="loadingImpuestos" @click="loadImpuestos"><ReloadOutlined /></a-button>
+            <a-button type="primary" @click="abrirNuevoImpuesto">
+              <PlusOutlined /> Nuevo Impuesto
+            </a-button>
+          </div>
+          <a-table :columns="colsImpuestos" :data-source="impuestos" :loading="loadingImpuestos"
+            row-key="id" size="small"
+            :pagination="{ pageSize: 20, showTotal: t => `${t} impuestos` }"
+            :scroll="{ x: 600 }">
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'tasa'">
+                <strong>{{ record.tasa }} %</strong>
+              </template>
+              <template v-if="column.key === 'activo_i'">
+                <a-tag :color="record.activo ? 'success' : 'default'">{{ record.activo ? 'Activo' : 'Inactivo' }}</a-tag>
+              </template>
+              <template v-if="column.key === 'acciones_i'">
+                <a-space>
+                  <a-tooltip title="Editar">
+                    <a-button size="small" @click="editarImpuesto(record)"><template #icon><EditOutlined /></template></a-button>
+                  </a-tooltip>
+                  <a-tooltip title="Eliminar">
+                    <a-button size="small" danger @click="eliminarImpuesto(record.id)"><template #icon><DeleteOutlined /></template></a-button>
+                  </a-tooltip>
+                </a-space>
+              </template>
+            </template>
+          </a-table>
+        </a-tab-pane>
+
+        <a-tab-pane key="categorias">
+          <template #tab><IdcardOutlined /> Categorías Impositivas</template>
+          <a-alert type="info" show-icon
+            message="Las categorías definen el comportamiento de clientes y proveedores ante AFIP."
+            style="margin-bottom:14px;font-size:12px"
+          />
+          <div class="tab-toolbar">
+            <a-button :loading="loadingCategorias" @click="loadCategorias"><ReloadOutlined /></a-button>
+            <a-button type="primary" @click="abrirNuevaCategoria">
+              <PlusOutlined /> Nueva Categoría
+            </a-button>
+          </div>
+          <a-table :columns="colsCategorias" :data-source="categorias" :loading="loadingCategorias"
+            row-key="id" size="small"
+            :pagination="{ pageSize: 20, showTotal: t => `${t} categorías` }"
+            :scroll="{ x: 700 }">
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'flags_c'">
+                <a-space wrap>
+                  <a-tag v-if="record.requiere_cuit" color="blue" style="font-size:10px">Requiere CUIT</a-tag>
+                  <a-tag v-if="record.discrimina_iva" color="green" style="font-size:10px">Discrimina IVA (Factura A)</a-tag>
+                  <a-tag v-if="record.es_consumidor_final" color="orange" style="font-size:10px">Consumidor Final</a-tag>
+                </a-space>
+              </template>
+              <template v-if="column.key === 'acciones_c'">
+                <a-space>
+                  <a-tooltip title="Editar">
+                    <a-button size="small" @click="editarCategoria(record)"><template #icon><EditOutlined /></template></a-button>
+                  </a-tooltip>
+                  <a-tooltip title="Eliminar">
+                    <a-button size="small" danger @click="eliminarCategoria(record.id)"><template #icon><DeleteOutlined /></template></a-button>
                   </a-tooltip>
                 </a-space>
               </template>

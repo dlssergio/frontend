@@ -190,17 +190,51 @@ const clientSelect = ref(null)
 const clientes = ref([])
 const cargandoClientes = ref(false)
 
-const tiposComprobante = ref([
-  { value: 1, label: 'Factura A' },
-  { value: 2, label: 'Factura B' },
-])
+// Variable reactiva que contendrá los talonarios cargados desde la API
+const seriesDisponibles = ref([])
 
 const formState = reactive({
   clienteId: null,
-  tipoComprobanteId: 2,
+  serieId: null,           // Sustituye a tipoComprobanteId en el select
+  tipoComprobanteId: null, // Se auto-llenará al elegir la serie
   fecha: dayjs(),
-  puntoVenta: configStore.puntoVentaDefault || 1,
+  puntoVenta: 1,           // Se auto-llenará al elegir la serie
 })
+
+/** ─── Series (Talonarios) Dinámicos ──────────────────────────────────────────── */
+const cargarSeries = async () => {
+  try {
+    // Pedimos al backend las series activas correspondientes a Ventas (Clase 'V')
+    const { data } = await api.get('/api/series/', { params: { clase: 'V', activo: true } })
+    const datos = data?.results ?? data
+
+    seriesDisponibles.value = (datos || []).map(s => ({
+      value: s.id,
+      label: `${s.nombre} (PV: ${s.punto_venta} - ${s.letra})`,
+      fullData: s
+    }))
+
+    // Si hay series y el formulario aún no tiene una seleccionada, preseleccionar la primera
+    if (seriesDisponibles.value.length > 0 && !formState.serieId) {
+      handleSeleccionarSerie(seriesDisponibles.value[0].value)
+    }
+  } catch (error) {
+    console.error('Error cargando las series (talonarios):', error)
+    message.error('No se pudieron cargar los talonarios de facturación.')
+  }
+}
+
+const handleSeleccionarSerie = (serieId) => {
+  const serie = seriesDisponibles.value.find(s => s.value === serieId)?.fullData
+  if (!serie) return
+
+  formState.serieId = serie.id
+  formState.tipoComprobanteId = serie.tipo_comprobante
+  formState.puntoVenta = serie.punto_venta
+
+  // Si la serie tiene un depósito por defecto, preseleccionarlo (si aplica a tu lógica de UI)
+  // formState.deposito = serie.deposito_defecto || formState.deposito
+}
 
 const items = ref([])
 const selectedRowKey = ref(null)
@@ -858,9 +892,11 @@ const selectClientFromModal = async (row) => {
 
 watch(clienteInfo, (nuevoCliente) => {
   if (!nuevoCliente) return
+  /* Lógica anterior comentada porque ahora depende del talonario/serie
   formState.tipoComprobanteId = (nuevoCliente.condicion || '').toLowerCase().includes('inscripto')
     ? 1
     : 2
+  */
   condicionPago.value = 'CONTADO'
   setContext('client')
 })
@@ -1219,6 +1255,7 @@ const draftId = ref(null)
 const buildPayload = (estado, pagos = [], { dateOnly = false, includeNested = true } = {}) => {
   const payload = {
     cliente: toInt(formState.clienteId),
+    serie: toInt(formState.serieId),
     tipo_comprobante: toInt(formState.tipoComprobanteId),
     fecha: dateOnly
       ? formatFechaDateOnly(formState.fecha)
@@ -1255,9 +1292,12 @@ const buildPayload = (estado, pagos = [], { dateOnly = false, includeNested = tr
 /** Advertencia AFIP para el panel de cliente genérico */
 const afipCuitWarning = computed(() => {
   if (!isClienteGenerico.value) return null
-  const letra =
-    tiposComprobante.value.find((t) => t.value === formState.tipoComprobanteId)?.label || ''
-  const esLetraA = letra.toUpperCase().includes(' A')
+
+  // FIX: Leer la letra desde la serie preseleccionada en lugar de 'tiposComprobante'
+  const serieActiva = seriesDisponibles.value.find((s) => s.value === formState.serieId)?.fullData
+  const letra = serieActiva ? (serieActiva.letra || '') : ''
+  const esLetraA = letra.toUpperCase() === 'A'
+
   const cuitIngresado = clienteOverride.cuit.trim()
   if (esLetraA && !cuitIngresado)
     return 'Factura A requiere CUIT del receptor. Completá el campo CUIT/DNI.'
@@ -2016,6 +2056,9 @@ onMounted(() => {
   // Cargar cliente genérico (C00000) por defecto al iniciar el POS
   loadClienteGenerico()
 
+  // Cargar los talonarios desde la base de datos
+  cargarSeries()
+
   setTimeout(() => clientSelect.value?.focus?.(), 150)
   window.addEventListener('keydown', handleShortcuts)
   setContext('none')
@@ -2200,10 +2243,12 @@ onUnmounted(() => {
                   <div class="field-group">
                     <span class="field-label">Comprobante</span>
                     <a-select
-                      v-model:value="formState.tipoComprobanteId"
-                      :options="tiposComprobante"
+                      v-model:value="formState.serieId"
+                      :options="seriesDisponibles"
+                      @change="handleSeleccionarSerie"
                       style="width: 100%"
                       size="large"
+                      placeholder="Seleccione Talonario..."
                       :getPopupContainer="() => posRootEl || document.body"
                     />
                   </div>

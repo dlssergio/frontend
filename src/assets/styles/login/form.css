@@ -1,0 +1,221 @@
+/*======================================================
+FORM PANEL
+======================================================*/
+
+.form-panel{
+
+    width:460px;
+
+    height:100%;
+
+    background:#FFFFFF;
+
+    display:flex;
+
+    justify-content:center;
+
+    align-items:center;
+
+    position:relative;
+
+}
+
+.content{
+
+    width:100%;
+
+    padding:60px;
+
+}
+
+/*======================================================
+LOGO MINI
+======================================================*/
+
+.logo-mini{
+
+    width:56px;
+
+    margin-bottom:34px;
+
+    user-select:none;
+
+}
+
+/*======================================================
+TEXTOS
+======================================================*/
+
+.title{
+
+    margin:0;
+
+    font-size:36px;
+
+    font-weight:700;
+
+    color:#0F172A;
+
+    letter-spacing:-1px;
+
+}
+
+.subtitle{
+
+    margin-top:14px;
+
+    margin-bottom:42px;
+
+    line-height:1.8;
+
+    color:#64748B;
+
+    font-size:15px;
+
+}
+
+/*======================================================
+FORM
+======================================================*/
+
+.form{
+
+    display:flex;
+
+    flex-direction:column;
+
+    gap:22px;
+
+}
+
+/*======================================================
+OPCIONES
+======================================================*/
+
+.options{
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    margin-top:6px;
+
+}
+
+.remember{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:10px;
+
+    color:#64748B;
+
+    font-size:14px;
+
+}
+
+.remember input{
+
+    accent-color:#2563EB;
+
+}
+
+.forgot{
+
+    color:#2563EB;
+
+    text-decoration:none;
+
+    font-size:14px;
+
+    font-weight:600;
+
+    transition:.25s;
+
+}
+
+.forgot:hover{
+
+    color:#1D4ED8;
+
+}
+
+/*======================================================
+ERROR
+======================================================*/
+
+.form-error{
+
+    color:#DC2626;
+
+    font-size:14px;
+
+    font-weight:600;
+
+}
+
+/*======================================================
+FOOTER
+======================================================*/
+
+.footer{
+
+    margin-top:60px;
+
+    display:flex;
+
+    justify-content:space-between;
+
+    align-items:center;
+
+    color:#94A3B8;
+
+    font-size:13px;
+
+}
+
+.version{
+
+    font-weight:600;
+
+}
+
+.company{
+
+    opacity:.8;
+
+}
+
+/*======================================================
+ANIMACIONES
+======================================================*/
+
+.content{
+
+    animation:panelFade .9s ease;
+
+}
+
+@keyframes panelFade{
+
+    from{
+
+        opacity:0;
+
+        transform:translateX(18px);
+
+    }
+
+    to{
+
+        opacity:1;
+
+        transform:none;
+
+    }
+
+}
